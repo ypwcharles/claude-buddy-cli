@@ -6,17 +6,15 @@
 
 [中文](./README.zh-CN.md) | [English](./README.en.md)
 
-**AI Agent-first CLI** for searching Claude Code Buddy pets and applying matching `userID` configs. 人类用户和 AI Agent 均可使用。
+**Claude Code Buddy 搜索工具** — 帮你在 Claude Code 中找到你想要的宠物伙伴，并一键换上它。
 
 [安装](#安装) · [命令](#命令) · [人类用户快速开始](#人类用户快速开始) · [AI Agent 快速开始](#ai-agent-快速开始) · [安全规则](#安全规则) · [文档](./README.zh-CN.md)
 
 ## 为什么选 claude-buddy-cli？
 
-- **全量种子空间搜索** — 遍历全部 32-bit 种子（约 43 亿），找出符合筛选条件的 Buddy
-- **确定性生成** — 相同种子必然生成相同 Buddy，结果可复现
-- **UID 逆向重建** — 从种子反推 64 位 hex `userID`，并写入 Claude Code 配置
-- **双运行时支持** — Bun 下使用并行 Worker 高速重建，Node 下使用 meet-in-the-middle 算法
-- **安全写入** — `doctor` 诊断后再 `--apply`，默认阻断冲突写入
+- **43 亿种可能** — 搜索全部 Buddy 生成空间，找到符合你要求的宠物
+- **零配置** — 不需要登录，不需要申请 key，直接装就用
+- **安全** — 写入前先诊断，不会覆盖你现有的配置
 
 ## 功能
 
