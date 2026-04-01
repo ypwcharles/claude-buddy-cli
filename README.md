@@ -6,7 +6,7 @@
 
 [中文](./README.zh-CN.md) | [English](./README.en.md)
 
-**AI Agent-first CLI** for searching Claude Code Buddy pets and applying matching `userID` configs. 由 [larksuite](https://github.com/larksuite) 团队维护的 Buddy 搜索工具，人类用户和 AI Agent 均可使用。
+**AI Agent-first CLI** for searching Claude Code Buddy pets and applying matching `userID` configs. 人类用户和 AI Agent 均可使用。
 
 [安装](#安装) · [命令](#命令) · [人类用户快速开始](#人类用户快速开始) · [AI Agent 快速开始](#ai-agent-快速开始) · [安全规则](#安全规则) · [文档](./README.zh-CN.md)
 
