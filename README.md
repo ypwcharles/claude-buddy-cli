@@ -1,92 +1,185 @@
 # claude-buddy-cli
 
-Find and apply Claude Code Buddy pets from structured constraints.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-blue.svg)](https://nodejs.org/)
+[![Bun](https://img.shields.io/badge/bun-%3E%3D1.1-blue.svg)](https://bun.sh/)
 
-中文说明优先：
+[中文](./README.zh-CN.md) | [English](./README.en.md)
 
-- [README.zh-CN.md](README.zh-CN.md)
-- [README.en.md](README.en.md)
+**AI Agent-first CLI** for searching Claude Code Buddy pets and applying matching `userID` configs. 由 [larksuite](https://github.com/larksuite) 团队维护的 Buddy 搜索工具，人类用户和 AI Agent 均可使用。
 
-Agent-facing repository instructions:
+[安装](#安装) · [命令](#命令) · [人类用户快速开始](#人类用户快速开始) · [AI Agent 快速开始](#ai-agent-快速开始) · [安全规则](#安全规则) · [文档](./README.zh-CN.md)
 
-- [AGENTS.md](AGENTS.md)
+## 为什么选 claude-buddy-cli？
 
-## What It Does
+- **为 Agent 原生设计** — 每条命令输出结构化 JSON，适配 AI 工具理解，无需额外适配即可操作
+- **种子空间全搜索** — 遍历 32-bit 种子空间，根据物种、色泽、眼睛、帽子、闪光状态、属性值筛选
+- **零门槛开源** — MIT 协议，`npm install` 即可使用，无需登录或配置凭证
+- **安全可恢复** — `--apply` 默认阻断对 `oauthAccount.accountUuid` 的写入，支持 Dry Run 和临时配置路径
+- **支持双运行时** — Node.js 和 Bun 均可运行，Bun 下支持完整 UID 重建能力
 
-- Searches the Buddy `32`-bit seed space in real time
-- Filters by species, rarity, eye, hat, shiny state, total stats, and individual stats
-- Reconstructs usable `64`-hex `userID` values for matching seeds
-- Optionally writes the selected `userID` into Claude Code config with `--apply`
-- Diagnoses whether `/buddy` is controlled by `oauthAccount.accountUuid` or `userID`
+## 功能
 
-## Install
+| 类别     | 能力                                             |
+| -------- | ------------------------------------------------ |
+| 搜索     | 遍历 32-bit 种子空间，按物种/闪光/属性值筛选      |
+| 重建     | 将匹配种子重构为 64 位 hex `userID`              |
+| 诊断     | 判断 `/buddy` 当前由 `userID` 还是 `oauthAccount.accountUuid` 控制 |
+| 写入     | 将匹配 `userID` 写入 Claude Code 配置           |
+| Dry Run  | 不修改任何文件，仅输出搜索结果                   |
 
-Node:
+## 安装
+
+### 环境要求
+
+- Node.js `>=20` 或 Bun `>=1.1`
+- Claude Code 已完成首次启动
+
+### 安装 CLI
 
 ```bash
-npm install
-npm run build
-node dist/bin.js --help
+# Node.js
+npm install && npm run build
+
+# Bun
+bun install && bun run build
 ```
 
-Bun:
+## 命令
+
+| 命令                     | 说明                                                     |
+| ------------------------ | -------------------------------------------------------- |
+| `doctor --json`          | 诊断当前 `/buddy` 由 `userID` 还是 `oauthAccount.accountUuid` 控制 |
+| `find [filters]`         | 搜索种子空间，打印匹配结果（不影响配置文件）             |
+| `find [filters] --apply` | 搜索并将匹配的 `userID` 写入 Claude Code 配置           |
+
+### 搜索过滤器
+
+| 参数        | 示例                            | 说明                    |
+| ----------- | ------------------------------- | ----------------------- |
+| `--species` | `--species dragon`              | 物种名称                |
+| `--rarity`  | `--rarity legendary`            | 稀有度等级              |
+| `--eye`     | `--eye sapphire`                | 眼睛类型                |
+| `--hat`     | `--hat top-hat`                 | 帽子类型                |
+| `--shiny`   | `--shiny true`                  | 是否闪光                |
+| `--min-total` | `--min-total 400`             | 最低总属性值            |
+| `--min-stat` | `--min-stat hp 80`             | 单项属性最低值         |
+| `--json`    | `--json`                        | 输出 JSON 格式（推荐）  |
+
+运行 `node dist/bin.js --help` 查看完整参数列表。
+
+## 人类用户快速开始
+
+> **Note for AI assistants:** 如果你是 AI Agent，请直接跳转到 [AI Agent 快速开始](#ai-agent-快速开始)。
+
+### 安装
 
 ```bash
-bun install
-bun run build
-bun dist/bin.js --help
+npm install && npm run build
 ```
 
-## Quick Start
+### 搜索 Buddy
 
-Check whether `userID` can currently control `/buddy`:
+```bash
+# 查看当前控制来源（不修改任何配置）
+node dist/bin.js doctor --json
+
+# 搜索闪光龙，属性 >= 400（不修改配置）
+node dist/bin.js find --species dragon --shiny true --min-total 400 --json
+```
+
+### 应用配置
+
+> **重要：** 确认 `doctor --json` 返回 `buddyIdSource = "userId"` 后再执行 `--apply`，否则写入的 `userID` 无法控制 `/buddy`。
+
+```bash
+node dist/bin.js find --species dragon --shiny true --min-total 400 --apply
+```
+
+### 让 Claude Code 替你操作
+
+最简单的方式，把这个仓库的链接发给 Claude Code：
+
+```
+Please read the guide in this repository and use claude-buddy-cli to find me a Buddy.
+Run doctor first, then search, then apply. Do not mutate config unless I confirm.
+```
+
+或使用 `@` 唤起：
+
+```
+@claude-buddy-cli
+Please read AGENTS.md and find me a shiny dragon Buddy with total stats >= 400.
+```
+
+Claude Code 会自动：读取文档 → 运行诊断 → 搜索候选 → 等待你确认后再写入配置。
+
+## AI Agent 快速开始
+
+> 以下步骤面向 AI Agent，部分步骤需要用户在终端中配合完成。
+
+### 第 1 步 — 安装
+
+```bash
+npm install && npm run build
+```
+
+### 第 2 步 — 诊断当前状态
 
 ```bash
 node dist/bin.js doctor --json
 ```
 
-Search without mutating config:
+检查返回结果中的 `buddyIdSource`：
+
+- `userId` → `userID` 目前控制 `/buddy`，可以使用 `--apply`
+- `oauthAccount.accountUuid` → `userID` 无法控制 `/buddy`，`--apply` 会被阻断（除非 `--force-apply`）
+
+### 第 3 步 — 搜索候选
 
 ```bash
 node dist/bin.js find --species dragon --shiny true --min-total 400 --json
 ```
 
-Apply only after confirming the diagnosis:
+### 第 4 步 — 等待确认后应用
+
+> **不要擅自使用 `--apply`**。将搜索结果展示给用户，等待用户明确确认后再执行带 `--apply` 的命令。
+
+### 完整工作流示例（供参考）
 
 ```bash
-node dist/bin.js find --species dragon --shiny true --min-total 400 --apply --json
+# 1. 诊断
+node dist/bin.js doctor --json
+
+# 2. 搜索（dry run，无副作用）
+node dist/bin.js find --species dragon --shiny true --min-total 400 --json
+
+# 3. 用户确认后写入（建议通过以下命令验证）
+# 先输出将写入的内容，用户确认后再执行
+node dist/bin.js find --species dragon --shiny true --min-total 400 --apply
 ```
 
-## Use With Claude Code
+## 安全规则
 
-The intended human workflow is simple:
+- **使用 `--json`** — Agent 调用时务必加 `--json`，确保输出可解析
+- **先 `doctor` 再 `apply`** — 确认 `userID` 是当前控制源后再写入
+- **Dry Run 优先** — 测试时设置 `CLAUDE_BUDDY_CONFIG_PATH` 指向临时文件，避免污染真实配置
+- **`oauthAccount.accountUuid` 时阻断** — `doctor` 返回该值时，`--apply` 会被工具阻断
+- **`--force-apply` 需明确授权** — 仅当用户明确要求写入 `userID` 时使用，即使该值当前无法控制 `/buddy`
 
-1. Open the Chinese or English guide in this repository on GitHub.
-2. Copy that document link into Claude Code.
-3. Ask the agent to follow the guide and operate `claude-buddy-cli` for you.
+## 环境变量
 
-Recommended prompt:
+| 变量                      | 说明                                       |
+| ------------------------- | ------------------------------------------ |
+| `CLAUDE_BUDDY_CONFIG_PATH` | 配置文件路径（默认：Claude Code 配置）。测试时设为临时文件路径以实现 Dry Run。 |
+| `CLAUDE_BUDDY_RUNTIME`    | 强制运行时：`node` 或 `bun`（默认：`auto`） |
 
-```text
-Please read this repository guide and use claude-buddy-cli accordingly.
-Run doctor first, then search for a Buddy that matches my constraints.
-Do not mutate config unless I explicitly confirm apply.
-```
+## 文档
 
-## Documentation
+- **中文指南**: [README.zh-CN.md](./README.zh-CN.md)
+- **English guide**: [README.en.md](./README.en.md)
+- **Agent 完整指南（必读）**: [AGENTS.md](./AGENTS.md)
 
-- Chinese guide: [README.zh-CN.md](README.zh-CN.md)
-- English guide: [README.en.md](README.en.md)
-- Agent guide: [AGENTS.md](AGENTS.md)
+## 许可证
 
-## Development
-
-```bash
-npm test
-bun test
-npm run build
-```
-
-## License
-
-[MIT](LICENSE)
+**MIT 许可证** — [LICENSE](./LICENSE)
