@@ -58,6 +58,8 @@ type FindCommandOptions = {
 type PresetsCommandOptions = {
   runtime: RuntimeMode;
   json: boolean;
+  category?: string;
+  species?: SearchFilters["species"];
 };
 
 type MaterializeCommandOptions = {
@@ -86,6 +88,18 @@ const RARITY_VALUES = RARITIES.join(", ");
 const EYE_VALUES = EYES.join(", ");
 const HAT_VALUES = HATS.join(", ");
 const STAT_VALUES = STAT_NAMES.join(", ");
+const FULL421_PRESET_COUNT = listBuddyPresets().filter(
+  (preset) => preset.category === "full421",
+).length;
+const SPECIES_SHINY_MAX_PRESET_COUNT = listBuddyPresets().filter(
+  (preset) => preset.category === "species-shiny-max",
+).length;
+const SPECIES_SHINY_MAX_SPECIES_COUNT = new Set(
+  listBuddyPresets()
+    .filter((preset) => preset.category === "species-shiny-max")
+    .map((preset) => preset.filters.species)
+    .filter((species): species is SearchFilters["species"] => species !== undefined),
+).size;
 
 const HELP_TEXT = `claude-buddy
 
@@ -105,7 +119,7 @@ AI AGENT CONTRACT / AI AGENT 调用约定
 COMMAND / 命令
   claude-buddy find [flags]
   claude-buddy materialize --seed <n> [flags]
-  claude-buddy presets [--runtime <mode>] [--json]
+  claude-buddy presets [--runtime <mode>] [--category <name>] [--species <name>] [--json]
   claude-buddy doctor [--json]
 
 FIND FLAGS / 查询参数
@@ -162,6 +176,23 @@ GENERATION LIMITS / 生成硬限制
   structural rule: rarity=common always forces hat=none
   feasibility: not all filter combinations are reachable; zero results in a full scan means no such buddy exists in this seed space
 
+PRESETS FLAGS / 预设查询参数
+  --runtime <mode>          auto | node | bun
+  --category <name>         按预设分类筛选 / Filter by preset category
+  --species <name>          按预设目标物种筛选 / Filter preset target species
+  --json                    stdout 输出 JSON / Print machine-readable JSON to stdout
+  --help                    打印帮助 / Print this help
+
+PRESET CATEGORY ENUMS / 预设分类可选值
+  curated
+  full421
+  species-shiny-max
+
+RESEARCH PRESET SEEDS / 研究预设种子集
+  full421 presets: ${FULL421_PRESET_COUNT} (all known total=421 buddies)
+  shiny max presets: ${SPECIES_SHINY_MAX_PRESET_COUNT} (covers ${SPECIES_SHINY_MAX_SPECIES_COUNT} species, includes tied maxima)
+  these built-in preset seeds are sourced from buddy-research-2026-04-02
+
 MATERIALIZE FLAGS / 精确反推参数
   --seed <n>                目标 seed / Target seed
   --runtime <mode>          auto | node | bun
@@ -178,7 +209,12 @@ MATERIALIZE FLAGS / 精确反推参数
 
 EXAMPLES / 示例
   claude-buddy presets --json
+  claude-buddy presets --category full421 --json
+  claude-buddy presets --category species-shiny-max --json
+  claude-buddy presets --category species-shiny-max --species dragon --json
   claude-buddy find --preset capybara-shiny-min-wisdom-51 --runtime bun --json
+  claude-buddy find --preset full421-rabbit-130412512 --runtime node --json
+  claude-buddy find --preset shiny-max-dragon-3716311402 --runtime bun --json
   claude-buddy find --species dragon --shiny true --min-total 400 --json
   claude-buddy find --species duck --rarity common --limit 5
   claude-buddy materialize --seed 3716311402 --runtime bun --state-file /tmp/buddy-state.json --max-steps 5 --json
@@ -416,6 +452,8 @@ function parseFindArgs(argv: string[]): FindCommandOptions {
 function parsePresetsArgs(argv: string[]): PresetsCommandOptions {
   let runtime: RuntimeMode = "auto";
   let json = false;
+  let category: string | undefined;
+  let species: SearchFilters["species"] | undefined;
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -424,6 +462,14 @@ function parsePresetsArgs(argv: string[]): PresetsCommandOptions {
     switch (arg) {
       case "--runtime":
         runtime = parseRuntime(next);
+        index++;
+        break;
+      case "--category":
+        category = next;
+        index++;
+        break;
+      case "--species":
+        species = next as SearchFilters["species"];
         index++;
         break;
       case "--json":
@@ -439,6 +485,8 @@ function parsePresetsArgs(argv: string[]): PresetsCommandOptions {
   return {
     runtime,
     json,
+    category,
+    species,
   };
 }
 
@@ -549,12 +597,48 @@ function formatPresetMetadata(
 
 function formatPresetsResult(command: PresetsCommandOptions) {
   const resolvedRuntime = resolveRuntime(command.runtime);
+  const allPresets = listBuddyPresets();
+  const filteredPresets = allPresets.filter((preset) => {
+    if (
+      command.category !== undefined &&
+      (preset.category ?? "curated") !== command.category
+    ) {
+      return false;
+    }
+    if (
+      command.species !== undefined &&
+      preset.filters.species !== command.species
+    ) {
+      return false;
+    }
+    return true;
+  });
+  const shinyMaxSpeciesCount = new Set(
+    allPresets
+      .filter((preset) => preset.category === "species-shiny-max")
+      .map((preset) => preset.filters.species)
+      .filter((species): species is SearchFilters["species"] => species !== undefined),
+  ).size;
 
   return {
     command: "presets",
     runtime: command.runtime,
     resolvedRuntime,
-    presets: listBuddyPresets().map((preset) => ({
+    filters: {
+      ...(command.category !== undefined ? { category: command.category } : {}),
+      ...(command.species !== undefined ? { species: command.species } : {}),
+    },
+    researchPresetSummary: {
+      full421PresetCount: allPresets.filter((preset) => preset.category === "full421")
+        .length,
+      speciesShinyMaxPresetCount: allPresets.filter(
+        (preset) => preset.category === "species-shiny-max",
+      ).length,
+      speciesShinyMaxSpeciesCount: shinyMaxSpeciesCount,
+      speciesShinyMaxIncludesTies: true,
+      source: "buddy-research-2026-04-02",
+    },
+    presets: filteredPresets.map((preset) => ({
       ...formatPresetMetadata(preset, resolvedRuntime),
       seed:
         resolvedRuntime === "node"

@@ -79,10 +79,19 @@ bun install && bun run build
 | Command | Description |
 | --- | --- |
 | `doctor --json` | Diagnose whether `/buddy` is controlled by `userID` or `oauthAccount.accountUuid` |
-| `presets --json` | List built-in Buddy presets and runtime availability |
+| `presets [filters] --json` | List built-in Buddy presets (with category/species filtering) and runtime availability |
 | `find [filters]` | Search seed space for Buddy matching filters (no config mutation) |
 | `materialize --seed <n>` | Reconstruct runtime-usable `userID` from exact seed, useful for long Bun tasks |
 | `find [filters] --apply` | Search and write matched `userID` to Claude Code config |
+
+### Preset List Filters
+
+| Parameter | Example | Allowed values / description |
+| --- | --- | --- |
+| `--category` | `--category full421` | `curated \| full421 \| species-shiny-max` |
+| `--species` | `--species dragon` | Return only presets targeting this species |
+| `--runtime` | `--runtime bun` | `auto \| node \| bun` |
+| `--json` | `--json` | Machine-readable JSON output (recommended) |
 
 ### Search Filters
 
@@ -117,15 +126,29 @@ Run `node dist/bin.js --help` for the complete option list.
 
 ### Built-in Presets
 
+Built-in research preset seeds are split into two groups:
+
+- `full421`: `40` presets covering all currently known total-`421` buddies
+- `species-shiny-max`: `28` presets covering shiny maximum stats for `18` species (includes tied maxima)
+
 ```bash
-# List presets available for current runtime
+# List all presets
 node dist/bin.js presets --json
 
-# Select a Node preset directly
-node dist/bin.js find --preset dragon-shiny-halo-debug-54-chaos-100 --runtime node --json
+# List full421 presets only (40)
+node dist/bin.js presets --category full421 --json
 
-# Select a Bun preset directly
-bun dist/bin.js find --preset capybara-shiny-min-wisdom-51 --runtime bun --json
+# List per-species shiny maxima presets only (28, covers 18 species)
+node dist/bin.js presets --category species-shiny-max --json
+
+# List shiny-max presets for one species (example: dragon)
+node dist/bin.js presets --category species-shiny-max --species dragon --json
+
+# Select a full421 preset directly (Node)
+node dist/bin.js find --preset full421-rabbit-130412512 --runtime node --json
+
+# Select a shiny-max preset directly (Bun)
+bun dist/bin.js find --preset shiny-max-dragon-3716311402 --runtime bun --json
 
 # For exact seed under Bun, use resumable materialize
 bun dist/bin.js materialize --seed 130412512 --runtime bun --state-file /tmp/buddy-materialize.json --max-steps 10 --json

@@ -79,10 +79,19 @@ bun install && bun run build
 | 命令                     | 说明                                                     |
 | ------------------------ | -------------------------------------------------------- |
 | `doctor --json`          | 诊断当前 `/buddy` 由 `userID` 还是 `oauthAccount.accountUuid` 控制 |
-| `presets --json`         | 列出内置 Buddy preset 及其运行时可用性                  |
+| `presets [filters] --json` | 列出内置 Buddy preset（支持按分类/物种过滤）及其运行时可用性 |
 | `find [filters]`         | 搜索种子空间，找出符合筛选条件的 Buddy（不影响配置文件） |
 | `materialize --seed <n>` | 将精确 seed 反推为对应运行时可用的 `userID`，适合 Bun 长任务 |
 | `find [filters] --apply` | 搜索并将匹配的 `userID` 写入 Claude Code 配置           |
+
+### preset 列表过滤器
+
+| 参数 | 示例 | 可选值 / 说明 |
+| --- | --- | --- |
+| `--category` | `--category full421` | `curated \| full421 \| species-shiny-max` |
+| `--species` | `--species dragon` | 仅返回预设目标物种为该值的 preset |
+| `--runtime` | `--runtime bun` | `auto \| node \| bun` |
+| `--json` | `--json` | 输出机器可读 JSON（推荐） |
 
 ### 搜索过滤器
 
@@ -117,15 +126,29 @@ bun install && bun run build
 
 ### 内置 preset
 
+内置 research preset seed 分两组：
+
+- `full421`：共 `40` 条，覆盖当前已知的所有总属性 `421` Buddy
+- `species-shiny-max`：共 `28` 条，覆盖 `18` 个物种的闪光最高属性（含并列最大值）
+
 ```bash
-# 查看当前运行时下哪些 preset 可用
+# 查看全部 preset
 node dist/bin.js presets --json
 
-# 直接选择一个 Node preset
-node dist/bin.js find --preset dragon-shiny-halo-debug-54-chaos-100 --runtime node --json
+# 仅查看 full421（40 条）
+node dist/bin.js presets --category full421 --json
 
-# 直接选择一个 Bun preset
-bun dist/bin.js find --preset capybara-shiny-min-wisdom-51 --runtime bun --json
+# 仅查看各物种闪光最高属性（28 条，覆盖 18 个物种）
+node dist/bin.js presets --category species-shiny-max --json
+
+# 查看某物种的闪光最高属性 preset（示例：dragon）
+node dist/bin.js presets --category species-shiny-max --species dragon --json
+
+# 直接使用 full421 preset（Node）
+node dist/bin.js find --preset full421-rabbit-130412512 --runtime node --json
+
+# 直接使用 shiny-max preset（Bun）
+bun dist/bin.js find --preset shiny-max-dragon-3716311402 --runtime bun --json
 
 # 对 Bun 的精确 seed，使用可恢复的 materialize
 bun dist/bin.js materialize --seed 130412512 --runtime bun --state-file /tmp/buddy-materialize.json --max-steps 10 --json

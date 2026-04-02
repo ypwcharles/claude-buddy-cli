@@ -27,6 +27,7 @@ describe("runCli", () => {
     expect(text).toContain("find");
     expect(text).toContain("materialize");
     expect(text).toContain("presets");
+    expect(text).toContain("--category");
     expect(text).toContain("--preset");
     expect(text).toContain("--species");
     expect(text).toContain("--min-debugging");

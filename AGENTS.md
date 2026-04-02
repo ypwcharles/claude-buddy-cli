@@ -34,7 +34,11 @@ Optional: list built-in presets first when the user wants a curated buddy instea
 
 ```bash
 node dist/bin.js presets --json
-node dist/bin.js find --preset capybara-shiny-min-wisdom-51 --runtime bun --json
+node dist/bin.js presets --category full421 --json
+node dist/bin.js presets --category species-shiny-max --json
+node dist/bin.js presets --category species-shiny-max --species dragon --json
+node dist/bin.js find --preset full421-rabbit-130412512 --runtime node --json
+bun dist/bin.js find --preset shiny-max-dragon-3716311402 --runtime bun --json
 ```
 
 If the user already has an exact Bun seed and wants a usable `userID`, use `materialize` instead of repeatedly rerunning `find`:
