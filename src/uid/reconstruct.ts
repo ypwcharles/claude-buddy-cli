@@ -22,6 +22,82 @@ const HEX_16 = Array.from(
   (_, value) => value.toString(16).padStart(4, "0"),
 );
 const HEX_BYTES = new TextEncoder().encode(HEX_ALPHABET);
+
+const GLOBAL_HEX16_TABLE = new Uint8Array(65536 * 4);
+for (let i = 0; i < 65536; i++) {
+  GLOBAL_HEX16_TABLE[i * 4 + 0] = HEX_BYTES[(i >>> 12) & 0xf];
+  GLOBAL_HEX16_TABLE[i * 4 + 1] = HEX_BYTES[(i >>> 8) & 0xf];
+  GLOBAL_HEX16_TABLE[i * 4 + 2] = HEX_BYTES[(i >>> 4) & 0xf];
+  GLOBAL_HEX16_TABLE[i * 4 + 3] = HEX_BYTES[i & 0xf];
+}
+
+let _nativeFFI: any = null;
+let _nativeAttempted = false;
+
+const NULL_PTR = BigInt(0);
+
+function normalizeSuffixBoundary(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(UINT32_LIMIT, Math.trunc(value)));
+}
+
+function loadNativeFFI(): any {
+  if (_nativeAttempted) return _nativeFFI;
+  _nativeAttempted = true;
+  if (typeof Bun === "undefined") return null;
+
+  try {
+    const ffi = require("bun:ffi");
+    const { join, dirname } = require("node:path");
+    const { existsSync, statSync } = require("node:fs");
+    const { spawnSync } = require("node:child_process");
+
+    // 从 dist/uid/ 往上找到项目根，再定位 src/uid/native
+    const projectRoot = dirname(dirname(import.meta.dirname));
+    const nativeSrcDir = join(projectRoot, "src", "uid", "native");
+    if (!existsSync(nativeSrcDir)) return null;
+
+    const ext = process.platform === "darwin" ? "dylib" : process.platform === "win32" ? "dll" : "so";
+    const dylibPath = join(nativeSrcDir, `scan.${process.arch}.${ext}`);
+    const scanSourcePath = join(nativeSrcDir, "scan.c");
+    const wyhashHeaderPath = join(nativeSrcDir, "wyhash.h");
+
+    const shouldRebuild =
+      !existsSync(dylibPath) ||
+      statSync(dylibPath).mtimeMs <
+        Math.max(
+          statSync(scanSourcePath).mtimeMs,
+          existsSync(wyhashHeaderPath) ? statSync(wyhashHeaderPath).mtimeMs : 0,
+        );
+
+    if (shouldRebuild) {
+      const { status } = spawnSync(
+        "clang",
+        ["-O3", "-shared", "-fPIC", scanSourcePath, "-o", dylibPath],
+        { stdio: "pipe" }
+      );
+      if (status !== 0) return null;
+    }
+
+    const lib = ffi.dlopen(dylibPath, {
+      scan_single_target: {
+        args: ["ptr", "u32", "u32", "u64", "u64", "ptr"],
+        returns: "i64"
+      },
+      scan_set_target: {
+        args: ["ptr", "u32", "ptr", "u32", "u64", "u64", "ptr", "ptr"],
+        returns: "i64"
+      }
+    });
+
+    _nativeFFI = { lib: lib.symbols, dylibPath };
+  } catch (e) {
+    _nativeFFI = null;
+  }
+  return _nativeFFI;
+}
 const BUN_SUFFIX_START = 56;
 const BUN_SUFFIX_END = 64;
 const UINT32_LIMIT = 0x1_0000_0000;
@@ -29,28 +105,68 @@ const BUN_SCAN_WORKER_CODE = `
 const { workerData } = require("node:worker_threads");
 const state = new Int32Array(workerData.shared);
 const bytes = new TextEncoder().encode(workerData.prefix + "00000000" + workerData.salt);
-const hexBytes = new TextEncoder().encode("0123456789abcdef");
+const targetSeed = workerData.targetSeed >>> 0;
+const start = Math.max(0, Math.min(0x1_0000_0000, Math.trunc(Number(workerData.start) || 0)));
+const end = Math.max(start, Math.min(0x1_0000_0000, Math.trunc(Number(workerData.end) || 0)));
 
-for (let suffix = workerData.start; suffix < workerData.end; suffix++) {
-  if (Atomics.load(state, 0) !== 0) break;
+let nativeLib = null;
+try {
+  const ffi = require("bun:ffi");
+  if (workerData.dylibPath) {
+    nativeLib = { ffi, sym: ffi.dlopen(workerData.dylibPath, {
+      scan_single_target: { args: ["ptr", "u32", "u32", "u64", "u64", "ptr"], returns: "i64" }
+    }).symbols };
+  }
+} catch(e) {}
 
-  let value = suffix >>> 0;
-  bytes[63] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[62] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[61] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[60] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[59] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[58] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[57] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[56] = hexBytes[value & 0xf];
-
-  const candidateSeed = Number(BigInt(Bun.hash(bytes)) & 0xffffffffn);
-  if (candidateSeed === (workerData.targetSeed >>> 0)) {
-    if (Atomics.compareExchange(state, 0, 0, 1) === 0) {
-      Atomics.store(state, 2, suffix | 0);
-      Atomics.notify(state, 0);
+if (nativeLib) {
+  // C 扫描：不传 state 指针（BigInt(0) = NULL），只拿返回的 suffix
+  let usedNative = false;
+  try {
+    const res = nativeLib.sym.scan_single_target(
+      nativeLib.ffi.ptr(bytes), bytes.length, targetSeed, BigInt(start), BigInt(end), BigInt(0)
+    );
+    usedNative = true;
+    if (res !== -1n) {
+      if (Atomics.compareExchange(state, 0, 0, 1) === 0) {
+        Atomics.store(state, 2, Number(res) | 0);
+        Atomics.notify(state, 0);
+      }
     }
-    break;
+  } catch(e) { /* 降级到 JS */ }
+  if (!usedNative) { nativeLib = null; }
+}
+
+if (!nativeLib) {
+  const hex16 = new Uint8Array(65536 * 4);
+  const hexChars = new TextEncoder().encode("0123456789abcdef");
+  for (let i = 0; i < 65536; i++) {
+    hex16[i * 4 + 0] = hexChars[(i >>> 12) & 0xf];
+    hex16[i * 4 + 1] = hexChars[(i >>> 8) & 0xf];
+    hex16[i * 4 + 2] = hexChars[(i >>> 4) & 0xf];
+    hex16[i * 4 + 3] = hexChars[i & 0xf];
+  }
+  for (let suffix = start; suffix < end; suffix++) {
+    if ((suffix & 1023) === 0 && Atomics.load(state, 0) !== 0) break;
+    const high = suffix >>> 16;
+    const low = suffix & 0xffff;
+    bytes[56] = hex16[high * 4 + 0];
+    bytes[57] = hex16[high * 4 + 1];
+    bytes[58] = hex16[high * 4 + 2];
+    bytes[59] = hex16[high * 4 + 3];
+    bytes[60] = hex16[low * 4 + 0];
+    bytes[61] = hex16[low * 4 + 1];
+    bytes[62] = hex16[low * 4 + 2];
+    bytes[63] = hex16[low * 4 + 3];
+    const h = Bun.hash(bytes);
+    const candidateSeed = typeof h === "bigint" ? Number(h & 0xffffffffn) : (h >>> 0);
+    if (candidateSeed === targetSeed) {
+      if (Atomics.compareExchange(state, 0, 0, 1) === 0) {
+        Atomics.store(state, 2, suffix | 0);
+        Atomics.notify(state, 0);
+      }
+      break;
+    }
   }
 }
 
@@ -65,33 +181,75 @@ const BUN_SEED_SET_SCAN_WORKER_CODE = `
 const { workerData } = require("node:worker_threads");
 const state = new Int32Array(workerData.shared);
 const bytes = new TextEncoder().encode(workerData.prefix + "00000000" + workerData.salt);
-const hexBytes = new TextEncoder().encode("0123456789abcdef");
-const targetSeeds = new Set(workerData.targetSeeds.map((value) => value >>> 0));
+const start = Math.max(0, Math.min(0x1_0000_0000, Math.trunc(Number(workerData.start) || 0)));
+const end = Math.max(start, Math.min(0x1_0000_0000, Math.trunc(Number(workerData.end) || 0)));
 
-for (let suffix = workerData.start; suffix < workerData.end; suffix++) {
-  if (Atomics.load(state, 0) !== 0) break;
-
-  let value = suffix >>> 0;
-  bytes[63] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[62] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[61] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[60] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[59] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[58] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[57] = hexBytes[value & 0xf]; value >>>= 4;
-  bytes[56] = hexBytes[value & 0xf];
-
-  const candidateSeed = Number(BigInt(Bun.hash(bytes)) & 0xffffffffn);
-  if (!targetSeeds.has(candidateSeed)) {
-    continue;
+let nativeLib = null;
+try {
+  const ffi = require("bun:ffi");
+  if (workerData.dylibPath) {
+    nativeLib = { ffi, sym: ffi.dlopen(workerData.dylibPath, {
+      scan_set_target: { args: ["ptr", "u32", "ptr", "u32", "u64", "u64", "ptr", "ptr"], returns: "i64" }
+    }).symbols };
   }
+} catch(e) {}
 
-  if (Atomics.compareExchange(state, 0, 0, 1) === 0) {
-    Atomics.store(state, 2, suffix | 0);
-    Atomics.store(state, 3, candidateSeed | 0);
-    Atomics.notify(state, 0);
+if (nativeLib) {
+  // C 扫描：不传 state/matched_seed_out 指针，只拿返回的 suffix
+  let usedNative = false;
+  try {
+    const seedsArray = new Uint32Array(workerData.targetSeeds);
+    const matchedOut = new Uint32Array(1);
+    const res = nativeLib.sym.scan_set_target(
+      nativeLib.ffi.ptr(bytes), bytes.length,
+      nativeLib.ffi.ptr(seedsArray), seedsArray.length,
+      BigInt(start), BigInt(end),
+      BigInt(0), nativeLib.ffi.ptr(matchedOut)
+    );
+    usedNative = true;
+    if (res !== -1n) {
+      if (Atomics.compareExchange(state, 0, 0, 1) === 0) {
+        Atomics.store(state, 2, Number(res) | 0);
+        Atomics.store(state, 3, matchedOut[0] | 0);
+        Atomics.notify(state, 0);
+      }
+    }
+  } catch(e) { /* 降级到 JS */ }
+  if (!usedNative) { nativeLib = null; }
+}
+
+if (!nativeLib) {
+  const hex16 = new Uint8Array(65536 * 4);
+  const hexChars = new TextEncoder().encode("0123456789abcdef");
+  for (let i = 0; i < 65536; i++) {
+    hex16[i * 4 + 0] = hexChars[(i >>> 12) & 0xf];
+    hex16[i * 4 + 1] = hexChars[(i >>> 8) & 0xf];
+    hex16[i * 4 + 2] = hexChars[(i >>> 4) & 0xf];
+    hex16[i * 4 + 3] = hexChars[i & 0xf];
   }
-  break;
+  const targetSeeds = new Set(workerData.targetSeeds.map(v => v >>> 0));
+  for (let suffix = start; suffix < end; suffix++) {
+    if ((suffix & 1023) === 0 && Atomics.load(state, 0) !== 0) break;
+    const high = suffix >>> 16;
+    const low = suffix & 0xffff;
+    bytes[56] = hex16[high * 4 + 0];
+    bytes[57] = hex16[high * 4 + 1];
+    bytes[58] = hex16[high * 4 + 2];
+    bytes[59] = hex16[high * 4 + 3];
+    bytes[60] = hex16[low * 4 + 0];
+    bytes[61] = hex16[low * 4 + 1];
+    bytes[62] = hex16[low * 4 + 2];
+    bytes[63] = hex16[low * 4 + 3];
+    const h = Bun.hash(bytes);
+    const candidateSeed = typeof h === "bigint" ? Number(h & 0xffffffffn) : (h >>> 0);
+    if (!targetSeeds.has(candidateSeed)) continue;
+    if (Atomics.compareExchange(state, 0, 0, 1) === 0) {
+      Atomics.store(state, 2, suffix | 0);
+      Atomics.store(state, 3, candidateSeed | 0);
+      Atomics.notify(state, 0);
+    }
+    break;
+  }
 }
 
 if (Atomics.add(state, 1, 1) + 1 === workerData.workerCount) {
@@ -186,22 +344,18 @@ function suffixToHex(suffix: number): string {
 }
 
 function writeSuffixHex(bytes: Uint8Array, suffix: number): void {
-  let value = suffix >>> 0;
-  bytes[BUN_SUFFIX_END - 1] = HEX_BYTES[value & 0xf];
-  value >>>= 4;
-  bytes[BUN_SUFFIX_END - 2] = HEX_BYTES[value & 0xf];
-  value >>>= 4;
-  bytes[BUN_SUFFIX_END - 3] = HEX_BYTES[value & 0xf];
-  value >>>= 4;
-  bytes[BUN_SUFFIX_END - 4] = HEX_BYTES[value & 0xf];
-  value >>>= 4;
-  bytes[BUN_SUFFIX_END - 5] = HEX_BYTES[value & 0xf];
-  value >>>= 4;
-  bytes[BUN_SUFFIX_END - 6] = HEX_BYTES[value & 0xf];
-  value >>>= 4;
-  bytes[BUN_SUFFIX_END - 7] = HEX_BYTES[value & 0xf];
-  value >>>= 4;
-  bytes[BUN_SUFFIX_START] = HEX_BYTES[value & 0xf];
+  const high = suffix >>> 16;
+  const low = suffix & 0xffff;
+
+  bytes[56] = GLOBAL_HEX16_TABLE[high * 4 + 0];
+  bytes[57] = GLOBAL_HEX16_TABLE[high * 4 + 1];
+  bytes[58] = GLOBAL_HEX16_TABLE[high * 4 + 2];
+  bytes[59] = GLOBAL_HEX16_TABLE[high * 4 + 3];
+
+  bytes[60] = GLOBAL_HEX16_TABLE[low * 4 + 0];
+  bytes[61] = GLOBAL_HEX16_TABLE[low * 4 + 1];
+  bytes[62] = GLOBAL_HEX16_TABLE[low * 4 + 2];
+  bytes[63] = GLOBAL_HEX16_TABLE[low * 4 + 3];
 }
 
 function resolveBunSearchSeed(searchSeed?: string): string {
@@ -336,13 +490,30 @@ function scanBunSuffixRange(
   start: number,
   end: number,
 ): number | null {
+  const ffiSetup = loadNativeFFI();
+  if (ffiSetup) {
+    const bytes = new TextEncoder().encode(prefix + "00000000" + BUDDY_SALT);
+    const ffi = require("bun:ffi");
+    const res = ffiSetup.lib.scan_single_target(
+      ffi.ptr(bytes),
+      bytes.length,
+      targetSeed >>> 0,
+      BigInt(start),
+      BigInt(end),
+      NULL_PTR,
+    );
+    if (res !== -1n) return Number(res);
+    return null;
+  }
+
   const bun = getRequiredBun();
   const bytes = new TextEncoder().encode(prefix + "00000000" + BUDDY_SALT);
 
   for (let suffix = start; suffix < end; suffix++) {
     writeSuffixHex(bytes, suffix);
 
-    const candidateSeed = Number(BigInt(bun.hash(bytes)) & 0xffffffffn);
+    const h = bun.hash(bytes);
+    const candidateSeed = typeof h === "bigint" ? Number(h & 0xffffffffn) : (h >>> 0);
     if (candidateSeed === (targetSeed >>> 0)) {
       return suffix >>> 0;
     }
@@ -357,13 +528,37 @@ function scanBunSeedSetRange(
   start: number,
   end: number,
 ): { seed: number; suffix: number } | null {
+  const ffiSetup = loadNativeFFI();
+  if (ffiSetup) {
+    const bytes = new TextEncoder().encode(prefix + "00000000" + BUDDY_SALT);
+    const ffi = require("bun:ffi");
+    const seedsArray = new Uint32Array([...targetSeeds]);
+    const matchedOut = new Uint32Array(1);
+    const res = ffiSetup.lib.scan_set_target(
+      ffi.ptr(bytes),
+      bytes.length,
+      ffi.ptr(seedsArray),
+      seedsArray.length,
+      BigInt(start),
+      BigInt(end),
+      NULL_PTR,
+      ffi.ptr(matchedOut),
+    );
+    if (res !== -1n) {
+      return { seed: matchedOut[0], suffix: Number(res) };
+    }
+    return null;
+  }
+
   const bun = getRequiredBun();
   const bytes = new TextEncoder().encode(prefix + "00000000" + BUDDY_SALT);
 
   for (let suffix = start; suffix < end; suffix++) {
     writeSuffixHex(bytes, suffix);
 
-    const candidateSeed = Number(BigInt(bun.hash(bytes)) & 0xffffffffn);
+    const h = bun.hash(bytes);
+    const candidateSeed = typeof h === "bigint" ? Number(h & 0xffffffffn) : (h >>> 0);
+    
     if (!targetSeeds.has(candidateSeed)) {
       continue;
     }
@@ -398,6 +593,7 @@ function scanBunSuffixParallel(
       new Worker(BUN_SCAN_WORKER_CODE, {
         eval: true,
         workerData: {
+          dylibPath: loadNativeFFI()?.dylibPath,
           prefix,
           salt: BUDDY_SALT,
           targetSeed,
@@ -453,6 +649,7 @@ function scanBunSeedSetParallel(
       new Worker(BUN_SEED_SET_SCAN_WORKER_CODE, {
         eval: true,
         workerData: {
+          dylibPath: loadNativeFFI()?.dylibPath,
           prefix,
           salt: BUDDY_SALT,
           targetSeeds,
@@ -587,7 +784,8 @@ export function searchBunWitnesses(
   for (let suffix = startSuffix; suffix < endSuffix; suffix++) {
     for (const lane of lanes) {
       writeSuffixHex(lane.bytes, suffix);
-      const seed = Number(BigInt(bun.hash(lane.bytes)) & 0xffffffffn);
+      const h = bun.hash(lane.bytes);
+      const seed = typeof h === "bigint" ? Number(h & 0xffffffffn) : (h >>> 0);
       const buddy = generateBuddyFromSeed(seed);
       const candidate: SearchCandidate = {
         seed,
@@ -713,6 +911,7 @@ export type BunMaterializationState = {
   laneCount: number;
   chunkSize: number;
   scanned: number;
+  nextPrefixAttempt: number;
   lanes: BunMaterializationLaneState[];
 };
 
@@ -739,13 +938,14 @@ export function createBunMaterializationState(
   } = {},
 ): BunMaterializationState {
   const laneCount = Math.max(1, options.laneCount ?? 1);
-  const chunkSize = Math.max(1, options.chunkSize ?? 1_000_000);
+  const chunkSize = Math.max(1, options.chunkSize ?? UINT32_LIMIT);
   return {
     targetSeed: targetSeed >>> 0,
     searchSeed: resolveBunSearchSeed(options.searchSeed),
     laneCount,
     chunkSize,
     scanned: 0,
+    nextPrefixAttempt: laneCount,
     lanes: Array.from({ length: laneCount }, (_, laneIndex) => ({
       prefixAttempt: laneIndex,
       nextSuffix: 0,
@@ -767,11 +967,17 @@ export function advanceBunMaterializationState(
   let scannedThisStep = 0;
 
   for (const lane of state.lanes) {
-    if (lane.completed) {
-      continue;
+    if (lane.completed && !Number.isFinite(lane.nextSuffix)) {
+      lane.nextSuffix = UINT32_LIMIT;
     }
 
-    const start = Math.max(0, lane.nextSuffix >>> 0);
+    if (lane.completed && normalizeSuffixBoundary(lane.nextSuffix) >= UINT32_LIMIT) {
+      lane.prefixAttempt = state.nextPrefixAttempt++;
+      lane.nextSuffix = 0;
+      lane.completed = false;
+    }
+
+    const start = normalizeSuffixBoundary(lane.nextSuffix);
     if (start >= UINT32_LIMIT) {
       lane.completed = true;
       continue;
@@ -812,11 +1018,11 @@ export function advanceBunMaterializationState(
     }
   }
 
-  return {
-    state,
-    scannedThisStep,
-    done: state.lanes.every((lane) => lane.completed),
-  };
+    return {
+      state,
+      scannedThisStep,
+      done: false,
+    };
 }
 
 export function materializeBunUidForSeedChunked(
@@ -854,7 +1060,7 @@ export function materializeBunUidForSeedChunked(
   return {
     state,
     scannedThisStep: totalScanned,
-    done: state.lanes.every((lane) => lane.completed),
+    done: false,
   };
 }
 

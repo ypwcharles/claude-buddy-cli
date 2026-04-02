@@ -60,13 +60,12 @@ bun dist/bin.js materialize --seed 130412512 --runtime bun --state-file /tmp/bud
 - `--runtime bun` must be executed from a Bun process if UID reconstruction or `--apply` is needed.
 - A `userID` is only "correct" relative to the runtime used by the target Claude Code installation.
 - Node-generated and Bun-generated `userID` values do not need to match each other.
-- For general Bun searches, `find --json` already returns directly usable `userID` values in results.
-- For those Bun searches, `--apply` writes the first result's `userID` instead of doing a second reconstruction pass.
-- General Bun search no longer stops at a fixed first-10-million witness budget; it keeps scanning until it finds enough results or exhausts the suffix space.
-- General Bun search uses internally randomized prefix lanes, so repeated dry-runs can return different but still valid `userID` values.
+- General Bun `find` now follows seed-first behavior (same as Node): dry-run returns seed-based buddy candidates.
+- For Bun, `find --apply` materializes a usable `userID` from the selected seed and then writes it.
+- If Bun materialization needs multiple passes, use `--state-file` so progress can resume.
 - Built-in Node presets are backed by stored seeds.
 - Exact Bun seeds can be materialized with `materialize`, which supports chunked scanning and resume via `--state-file`.
-- General Bun search and exact Bun materialization are different paths; use `find` for open-ended filters and `materialize` for a known exact seed.
+- Bun presets also return seed-based candidates on dry-run; `--apply` materializes/writes for the selected seed.
 
 ## Fresh-clone setup
 

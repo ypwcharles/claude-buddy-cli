@@ -1,15 +1,17 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
+import { generateBuddyFromSeed, getTotalStats } from "./buddy/generate.js";
 import { searchSeeds, type SearchProgressEvent } from "./search/search.js";
 import type { SearchFilters } from "./search/filters.js";
 import { applyUserIdToConfig, inspectBuddyIdentityControl } from "./claude/config.js";
 import { resolveRuntime } from "./claude/runtime.js";
+import { EYES, HATS, RARITIES, SPECIES, STAT_NAMES } from "./types.js";
 import {
   createBunMaterializationState,
   materializeBunUidForSeedChunked,
   reconstructUidForSeed,
-  searchBunWitnesses,
-  searchBunWitnessesForSeeds,
   type BunMaterializationResult,
   type BunMaterializationState,
 } from "./uid/reconstruct.js";
@@ -44,6 +46,12 @@ type FindCommandOptions = {
   startSeed?: number;
   endSeed?: number;
   limit?: number;
+  stateFile?: string;
+  chunkSize?: number;
+  laneCount?: number;
+  maxSteps?: number;
+  searchSeed?: string;
+  bunWorkers?: number;
   filters: SearchFilters;
 };
 
@@ -73,13 +81,11 @@ type BunMaterializationEnvelope = {
   found?: BunMaterializationResult;
 };
 
-function isExactSeedWindow(startSeed?: number, endSeed?: number): boolean {
-  return (
-    startSeed !== undefined &&
-    endSeed !== undefined &&
-    endSeed === startSeed + 1
-  );
-}
+const SPECIES_VALUES = SPECIES.join(", ");
+const RARITY_VALUES = RARITIES.join(", ");
+const EYE_VALUES = EYES.join(", ");
+const HAT_VALUES = HATS.join(", ");
+const STAT_VALUES = STAT_NAMES.join(", ");
 
 const HELP_TEXT = `claude-buddy
 
@@ -129,11 +135,32 @@ FIND FLAGS / 查询参数
   --start-seed <n>          起始 seed，含本值 / Inclusive seed scan start
   --end-seed <n>            结束 seed，不含本值 / Exclusive seed scan end
   --limit <n>               返回结果上限 / Maximum result count
+  --state-file <path>       Bun 精确 preset/materialize 的进度文件 / Resume state file for Bun exact preset/materialize
+  --chunk-size <n>          Bun 精确 materialize 每步扫描量 / Chunk size for Bun exact materialization
+  --lane-count <n>          Bun 精确 materialize lane 数量 / Lane count for Bun exact materialization
+  --max-steps <n>           Bun 精确 materialize 最多执行多少步 / Maximum steps for Bun exact materialization
+  --search-seed <text>      固定 Bun 精确 materialize campaign / Fix Bun exact materialization campaign
+  --bun-workers <n>         Bun 精确 materialize worker 数 / Worker count for Bun exact materialization
   --runtime <mode>          auto | node | bun
   --json                    stdout 输出 JSON / Print machine-readable JSON to stdout
   --apply                   将选中的 uid 写入 ~/.claude.json / Write selected uid
   --force-apply             即使 userID 不生效也强制写入 / Force write userID
   --help                    打印帮助 / Print this help
+
+FIND VALUE ENUMS / 可选值
+  species: ${SPECIES_VALUES}
+  rarity: ${RARITY_VALUES}
+  eye: ${EYE_VALUES}
+  hat: ${HAT_VALUES}
+  shiny: true | false
+  stats: ${STAT_VALUES} (single stat range: 1..100, current generator total max: 421)
+
+GENERATION LIMITS / 生成硬限制
+  seed space: 2^32 = 4,294,967,296
+  max reachable buddies: <= 4,294,967,296 (seed-determined upper bound)
+  stats hard limits: each stat 1..100, current generator total max: 421
+  structural rule: rarity=common always forces hat=none
+  feasibility: not all filter combinations are reachable; zero results in a full scan means no such buddy exists in this seed space
 
 MATERIALIZE FLAGS / 精确反推参数
   --seed <n>                目标 seed / Target seed
@@ -207,6 +234,12 @@ function parseFindArgs(argv: string[]): FindCommandOptions {
   let startSeed: number | undefined;
   let endSeed: number | undefined;
   let limit: number | undefined;
+  let stateFile: string | undefined;
+  let chunkSize: number | undefined;
+  let laneCount: number | undefined;
+  let maxSteps: number | undefined;
+  let searchSeed: string | undefined;
+  let bunWorkers: number | undefined;
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -317,6 +350,30 @@ function parseFindArgs(argv: string[]): FindCommandOptions {
         limit = parseNumberFlag(arg, next);
         index++;
         break;
+      case "--state-file":
+        stateFile = next;
+        index++;
+        break;
+      case "--chunk-size":
+        chunkSize = parseNumberFlag(arg, next);
+        index++;
+        break;
+      case "--lane-count":
+        laneCount = parseNumberFlag(arg, next);
+        index++;
+        break;
+      case "--max-steps":
+        maxSteps = parseNumberFlag(arg, next);
+        index++;
+        break;
+      case "--search-seed":
+        searchSeed = next;
+        index++;
+        break;
+      case "--bun-workers":
+        bunWorkers = parseNumberFlag(arg, next);
+        index++;
+        break;
       case "--runtime":
         runtime = parseRuntime(next);
         index++;
@@ -346,6 +403,12 @@ function parseFindArgs(argv: string[]): FindCommandOptions {
     startSeed,
     endSeed,
     limit,
+    stateFile,
+    chunkSize,
+    laneCount,
+    maxSteps,
+    searchSeed,
+    bunWorkers,
     filters,
   };
 }
@@ -525,6 +588,20 @@ function formatCandidateResult(result: {
   };
 }
 
+function buildCandidateFromSeed(seed: number) {
+  const buddy = generateBuddyFromSeed(seed);
+  return formatCandidateResult({
+    seed: seed >>> 0,
+    totalStats: getTotalStats(buddy.stats),
+    rarity: buddy.rarity,
+    species: buddy.species,
+    eye: buddy.eye,
+    hat: buddy.hat,
+    shiny: buddy.shiny,
+    stats: buddy.stats,
+  });
+}
+
 async function formatFindResult(command: FindCommandOptions, io: CliIo) {
   const resolvedRuntime = resolveRuntime(command.runtime);
 
@@ -538,7 +615,7 @@ async function formatFindResult(command: FindCommandOptions, io: CliIo) {
       throw new Error(`Preset ${command.presetId} is not available for ${resolvedRuntime} runtime.`);
     }
 
-    if (resolvedRuntime === "node" || preset.bun) {
+    if (resolvedRuntime === "node") {
       const resolvedPreset = resolvePresetForRuntime(command.presetId, resolvedRuntime);
 
       return {
@@ -554,18 +631,18 @@ async function formatFindResult(command: FindCommandOptions, io: CliIo) {
       };
     }
 
-    if (typeof Bun === "undefined") {
-      throw new Error(
-        "Bun runtime was requested, but this process is not running under Bun.",
-      );
+    const targetSeeds = Array.from(
+      preset.bunTargetSeeds ??
+        (preset.node ? [preset.node.seed] : preset.bun ? [preset.bun.seed] : []),
+    );
+    if (targetSeeds.length === 0) {
+      throw new Error(`Preset ${command.presetId} is not available for bun runtime.`);
     }
 
-    const targetSeeds = Array.from(
-      preset.bunTargetSeeds ?? (preset.node ? [preset.node.seed] : []),
-    );
-    const results = await searchBunWitnessesForSeeds(targetSeeds, {
-      limit: command.limit ?? 1,
-    });
+    const limit = Math.max(1, command.limit ?? 20);
+    const results = Array.from(new Set(targetSeeds.map((seed) => seed >>> 0)))
+      .slice(0, limit)
+      .map((seed) => buildCandidateFromSeed(seed));
 
     return {
       command: "find",
@@ -575,53 +652,8 @@ async function formatFindResult(command: FindCommandOptions, io: CliIo) {
       applyRequested: command.apply,
       filters: preset.filters,
       preset: formatPresetMetadata(preset, resolvedRuntime),
-      searchStrategy: "preset-bun-seed-set-search",
-      results: results.map((result) =>
-        formatCandidateResult({
-          seed: result.seed,
-          totalStats: result.totalStats,
-          rarity: result.buddy.rarity,
-          species: result.buddy.species,
-          eye: result.buddy.eye,
-          hat: result.buddy.hat,
-          shiny: result.buddy.shiny,
-          stats: result.buddy.stats,
-          userID: result.userID,
-        }),
-      ),
-    };
-  }
-
-  const exactSeedWindow = isExactSeedWindow(command.startSeed, command.endSeed);
-
-  if (resolvedRuntime === "bun" && !exactSeedWindow) {
-    const results = searchBunWitnesses(command.filters, {
-      limit: command.limit,
-      startSuffix: command.startSeed,
-      endSuffix: command.endSeed,
-    });
-
-    return {
-      command: "find",
-      runtime: command.runtime,
-      resolvedRuntime,
-      applied: false,
-      applyRequested: command.apply,
-      filters: command.filters,
-      searchStrategy: "bun-witness-search",
-      results: results.map((result) =>
-        formatCandidateResult({
-          seed: result.seed,
-          totalStats: result.totalStats,
-          rarity: result.buddy.rarity,
-          species: result.buddy.species,
-          eye: result.buddy.eye,
-          hat: result.buddy.hat,
-          shiny: result.buddy.shiny,
-          stats: result.buddy.stats,
-          userID: result.userID,
-        }),
-      ),
+      searchStrategy: "preset-bun-seed",
+      results,
     };
   }
 
@@ -723,7 +755,23 @@ async function writeBunMaterializationEnvelope(
   stateFile: string,
   envelope: BunMaterializationEnvelope,
 ): Promise<void> {
+  await mkdir(path.dirname(stateFile), { recursive: true });
   await writeFile(stateFile, `${JSON.stringify(envelope, null, 2)}\n`, "utf8");
+}
+
+function slugForStateFile(text: string): string {
+  return text.replace(/[^a-zA-Z0-9._-]+/g, "-");
+}
+
+function getAutoPresetMaterializeStateFile(
+  presetId: string,
+  seed: number,
+): string {
+  return path.join(
+    os.tmpdir(),
+    "claude-buddy-materialize",
+    `${slugForStateFile(presetId)}-${seed >>> 0}.json`,
+  );
 }
 
 function formatMaterializationProgress(state: BunMaterializationState) {
@@ -731,6 +779,7 @@ function formatMaterializationProgress(state: BunMaterializationState) {
     scanned: state.scanned,
     laneCount: state.laneCount,
     chunkSize: state.chunkSize,
+    nextPrefixAttempt: state.nextPrefixAttempt,
     completedLanes: state.lanes.filter((lane) => lane.completed).length,
     lanes: state.lanes.map((lane) => ({
       prefixAttempt: lane.prefixAttempt,
@@ -796,6 +845,10 @@ async function formatMaterializeResult(
   if (envelope) {
     resumed = true;
     state = envelope.state;
+    if (!Number.isFinite(state.nextPrefixAttempt)) {
+      state.nextPrefixAttempt =
+        Math.max(-1, ...state.lanes.map((lane) => lane.prefixAttempt)) + 1;
+    }
     if ((state.targetSeed >>> 0) !== (command.seed >>> 0)) {
       throw new Error(
         `State file seed ${state.targetSeed} does not match requested seed ${command.seed}.`,
@@ -863,7 +916,7 @@ async function formatMaterializeResult(
           },
         }
       : {}),
-    done: found !== undefined || state.lanes.every((lane) => lane.completed),
+    done: found !== undefined,
     resumed,
     stateFile: command.stateFile,
     progress: formatMaterializationProgress(state),
@@ -1058,23 +1111,55 @@ export async function runCli(
       let appliedResult = selected;
       let appliedStrategy:
         | "seed-reconstruction"
-        | "bun-witness-search"
+        | "bun-seed-materialization"
         | "preset-node-seed"
-        | "preset-bun-witness"
-        | "preset-bun-seed-set-search" =
+        | "preset-bun-seed-materialization" =
         "seed-reconstruction";
 
-      if (
-        (resolvedRuntime === "bun" || options.presetId !== undefined) &&
-        "userID" in selected
-      ) {
+      if ("userID" in selected && typeof selected.userID === "string") {
         appliedUserID = String(selected.userID);
+      } else if (resolvedRuntime === "bun") {
+        const stateFile =
+          options.stateFile ??
+          getAutoPresetMaterializeStateFile(
+            options.presetId ?? `seed-${selected.seed >>> 0}`,
+            selected.seed,
+          );
+        const materialized = await formatMaterializeResult({
+          seed: selected.seed,
+          runtime: "bun",
+          json: options.json,
+          apply: false,
+          forceApply: false,
+          stateFile,
+          searchSeed:
+            options.searchSeed ??
+            (options.stateFile === undefined ? `find-seed:${selected.seed >>> 0}` : undefined),
+          chunkSize: options.chunkSize,
+          laneCount: options.laneCount,
+          maxSteps: options.maxSteps,
+          bunWorkers: options.bunWorkers,
+        });
+
+        if (!materialized.result) {
+          throw new Error(
+            `Unable to materialize userID for seed ${selected.seed} yet. Resume with --state-file ${stateFile}.`,
+          );
+        }
+
+        appliedUserID = materialized.result.userID;
+        appliedSeed = materialized.result.seed;
+        appliedResult = {
+          ...selected,
+          userID: appliedUserID,
+        };
+        if (payload.results.length > 0) {
+          payload.results[0] = appliedResult;
+        }
         appliedStrategy =
-          payload.searchStrategy === "preset-bun-seed-set-search"
-            ? "preset-bun-seed-set-search"
-            : options.presetId !== undefined
-              ? "preset-bun-witness"
-              : "bun-witness-search";
+          options.presetId !== undefined
+            ? "preset-bun-seed-materialization"
+            : "bun-seed-materialization";
       } else {
         appliedUserID = reconstructUidForSeed(selected.seed, {
           runtime: resolvedRuntime,

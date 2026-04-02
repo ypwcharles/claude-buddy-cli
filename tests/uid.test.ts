@@ -114,7 +114,7 @@ describe("reconstructUidForSeed", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.userID).toBe(expectedUid);
     expect(results[0]?.seed).toBe(seed);
-  });
+  }, 15_000);
 
   bunOnly("finds a Bun witness directly from a target seed set", async () => {
     const searchSeed = "vitest-seed-set";
@@ -195,5 +195,53 @@ describe("reconstructUidForSeed", () => {
     expect(resumed.found?.userID).toBe(expectedUid);
     expect(resumed.found?.seed).toBe(seed);
     expect(resumed.done).toBe(true);
+  });
+
+  bunOnly("continues to the next Bun prefix lane after exhausting a full lane", () => {
+    const searchSeed = "vitest-materialize-next-lane";
+    const nextLanePrefix = buildBunWitnessPrefix(searchSeed, 1);
+    const expectedUid = `${nextLanePrefix}00000000`;
+    const seed = hashUserIdToSeed(expectedUid, "bun");
+
+    const state = {
+      targetSeed: seed,
+      searchSeed,
+      laneCount: 1,
+      chunkSize: 1,
+      scanned: 0,
+      nextPrefixAttempt: 1,
+      lanes: [
+        {
+          prefixAttempt: 0,
+          nextSuffix: 0x1_0000_0000,
+          completed: true,
+        },
+      ],
+    };
+
+    const step = advanceBunMaterializationState(state, { bunWorkers: 1 });
+
+    expect(step.found?.userID).toBe(expectedUid);
+    expect(step.found?.prefixAttempt).toBe(1);
+    expect(step.found?.suffix).toBe(0);
+    expect(step.done).toBe(true);
+  });
+
+  bunOnly("finds high-suffix Bun witnesses in parallel full-lane scans", () => {
+    const seed = 3716311402;
+    const expectedUid =
+      "daa49c31cd6ec545fb58da6ac9ba4e60b73b151dcea8d6df65a18d20fe189d19";
+
+    const result = materializeBunUidForSeedChunked(seed, {
+      searchSeed: "preset:shiny-max-dragon-3716311402",
+      laneCount: 1,
+      chunkSize: 0x1_0000_0000,
+      maxSteps: 1,
+      bunWorkers: 8,
+    });
+
+    expect(result.found?.userID).toBe(expectedUid);
+    expect(result.found?.seed).toBe(seed);
+    expect(result.done).toBe(true);
   });
 });

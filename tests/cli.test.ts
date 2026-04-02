@@ -7,7 +7,6 @@ import { hashUserIdToSeed } from "../src/buddy/hash.js";
 import { runCli } from "../src/cli.js";
 import {
   buildBunWitnessPrefix,
-  buildDeterministicHexPrefix,
 } from "../src/uid/reconstruct.js";
 
 describe("runCli", () => {
@@ -299,7 +298,8 @@ describe("runCli", () => {
     process.env.CLAUDE_BUDDY_CONFIG_PATH = configPath;
 
     try {
-      const prefix = buildDeterministicHexPrefix("bun", 56, 0);
+      const searchSeed = "vitest-cli-bun-apply-seed";
+      const prefix = buildBunWitnessPrefix(searchSeed, 0);
       const expectedUid = `${prefix}00000000`;
       const seed = hashUserIdToSeed(expectedUid, "bun");
 
@@ -315,6 +315,8 @@ describe("runCli", () => {
           "1",
           "--runtime",
           "bun",
+          "--search-seed",
+          searchSeed,
           "--apply",
           "--json",
         ],
@@ -479,7 +481,7 @@ describe("runCli", () => {
     }
   });
 
-  bunOnly("returns directly usable userIDs for Bun dry-run search", async () => {
+  bunOnly("returns seed candidates for Bun dry-run search", async () => {
     const output: string[] = [];
 
     const exitCode = await runCli(
@@ -510,16 +512,15 @@ describe("runCli", () => {
 
     const parsed = JSON.parse(output.join(""));
     expect(parsed.applied).toBe(false);
-    expect(parsed.searchStrategy).toBe("bun-witness-search");
+    expect(parsed.searchStrategy).toBe("seed-search");
     expect(parsed.results).toHaveLength(1);
-    expect(parsed.results[0].userID).toMatch(/^[0-9a-f]{64}$/);
-    expect(hashUserIdToSeed(parsed.results[0].userID, "bun")).toBe(parsed.results[0].seed);
+    expect(parsed.results[0].userID).toBeUndefined();
     expect(parsed.results[0].species).toBe("capybara");
     expect(parsed.results[0].shiny).toBe(true);
     expect(parsed.results[0].stats.WISDOM).toBeGreaterThanOrEqual(51);
   });
 
-  bunOnly("applies a practical Bun filter set without hanging", async () => {
+  bunOnly("applies a Bun seed-search result via materialization", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "claude-buddy-cli-bun-"));
     const configPath = path.join(directory, ".claude.json");
     await writeFile(
@@ -530,24 +531,25 @@ describe("runCli", () => {
     process.env.CLAUDE_BUDDY_CONFIG_PATH = configPath;
 
     try {
+      const searchSeed = "vitest-cli-bun-apply-from-seed-search";
+      const prefix = buildBunWitnessPrefix(searchSeed, 0);
+      const expectedUid = `${prefix}00000000`;
+      const seed = hashUserIdToSeed(expectedUid, "bun");
+
       const output: string[] = [];
       const exitCode = await runCli(
         [
           "find",
-          "--species",
-          "capybara",
-          "--shiny",
-          "true",
-          "--min-wisdom",
-          "51",
           "--start-seed",
-          "0",
+          String(seed),
           "--end-seed",
-          "1000000",
+          String(seed + 1),
           "--limit",
           "1",
           "--runtime",
           "bun",
+          "--search-seed",
+          searchSeed,
           "--apply",
           "--json",
         ],
@@ -560,15 +562,11 @@ describe("runCli", () => {
 
       const parsed = JSON.parse(output.join(""));
       expect(parsed.applied).toBe(true);
-      expect(parsed.searchStrategy).toBe("bun-witness-search");
-      expect(parsed.appliedStrategy).toBe("bun-witness-search");
-      expect(parsed.results[0].userID).toMatch(/^[0-9a-f]{64}$/);
-      expect(parsed.appliedUserID).toBe(parsed.results[0].userID);
+      expect(parsed.searchStrategy).toBe("seed-search");
+      expect(parsed.appliedStrategy).toBe("bun-seed-materialization");
+      expect(parsed.appliedUserID).toBe(expectedUid);
       expect(parsed.appliedSeed).toBe(parsed.results[0].seed);
-      expect(parsed.appliedResult).toEqual(parsed.results[0]);
-      expect(parsed.appliedResult.species).toBe("capybara");
-      expect(parsed.appliedResult.shiny).toBe(true);
-      expect(parsed.appliedResult.stats.WISDOM).toBeGreaterThanOrEqual(51);
+      expect(parsed.appliedResult.userID).toBe(parsed.appliedUserID);
       expect(hashUserIdToSeed(parsed.appliedUserID, "bun")).toBe(parsed.appliedSeed);
 
       const saved = JSON.parse(await readFile(configPath, "utf8")) as {
