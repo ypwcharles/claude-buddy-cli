@@ -4,6 +4,14 @@ This repository provides a structured CLI for Claude Code Buddy search and confi
 
 ## Recommended command order
 
+Before running commands, determine whether the **target Claude Code installation** uses Node semantics or Bun semantics.
+
+- If the target Claude Code was installed via Node, use the Node path for `--apply`
+- If the target Claude Code was installed via Bun, use the Bun path for `--apply`
+- Search itself is seed-based and runtime-independent
+- UID reconstruction and `--apply` are runtime-dependent
+- Do not assume Node is correct just because the current shell is running `node`
+
 1. Diagnose current control source:
 
 ```bash
@@ -22,6 +30,19 @@ node dist/bin.js find --species dragon --shiny true --min-total 400 --json
 node dist/bin.js find --species dragon --shiny true --min-total 400 --apply --json
 ```
 
+Optional: list built-in presets first when the user wants a curated buddy instead of an open-ended search:
+
+```bash
+node dist/bin.js presets --json
+node dist/bin.js find --preset capybara-shiny-min-wisdom-51 --runtime bun --json
+```
+
+If the user already has an exact Bun seed and wants a usable `userID`, use `materialize` instead of repeatedly rerunning `find`:
+
+```bash
+bun dist/bin.js materialize --seed 130412512 --runtime bun --state-file /tmp/buddy-materialize.json --max-steps 10 --json
+```
+
 ## Safety rules
 
 - Prefer `--json` for all agent calls.
@@ -37,6 +58,15 @@ node dist/bin.js find --species dragon --shiny true --min-total 400 --apply --js
 - `bun dist/bin.js ...` uses Bun semantics when `--runtime auto`.
 - `--runtime node` works from Node or Bun.
 - `--runtime bun` must be executed from a Bun process if UID reconstruction or `--apply` is needed.
+- A `userID` is only "correct" relative to the runtime used by the target Claude Code installation.
+- Node-generated and Bun-generated `userID` values do not need to match each other.
+- For general Bun searches, `find --json` already returns directly usable `userID` values in results.
+- For those Bun searches, `--apply` writes the first result's `userID` instead of doing a second reconstruction pass.
+- General Bun search no longer stops at a fixed first-10-million witness budget; it keeps scanning until it finds enough results or exhausts the suffix space.
+- General Bun search uses internally randomized prefix lanes, so repeated dry-runs can return different but still valid `userID` values.
+- Built-in Node presets are backed by stored seeds.
+- Exact Bun seeds can be materialized with `materialize`, which supports chunked scanning and resume via `--state-file`.
+- General Bun search and exact Bun materialization are different paths; use `find` for open-ended filters and `materialize` for a known exact seed.
 
 ## Fresh-clone setup
 

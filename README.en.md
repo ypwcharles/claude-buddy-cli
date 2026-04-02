@@ -8,12 +8,22 @@ Structured CLI for Claude Code Buddy search and apply. It scans Buddy seed space
 ## Features
 
 - Searches the Buddy `32`-bit seed space in real time
+- Lists built-in runtime-aware Buddy presets for quick selection
 - Filters by species, rarity, eye, hat, shiny state, total stats, and individual stats
 - Reconstructs usable `64`-hex `userID` values for matching seeds
 - Writes the selected `userID` into Claude Code config when `--apply` is used
 - Diagnoses whether `/buddy` is controlled by `oauthAccount.accountUuid` or `userID`
 
 ## Install
+
+## Runtime Selection Rule
+
+> Important: when reconstructing and applying a `userID`, match the **runtime used by the target Claude Code installation**, not just whichever runtime you are currently using locally.
+>
+> - If the target Claude Code is installed via Node, generate/apply using Node semantics
+> - If the target Claude Code is installed via Bun, generate/apply using Bun semantics
+> - Searching is seed-based and runtime-independent
+> - UID reconstruction and `--apply` are the runtime-dependent parts
 
 Node:
 
@@ -45,6 +55,8 @@ claude-buddy --help
 
 ## Quick Start
 
+Before applying anything, determine whether the target Claude Code installation uses Node or Bun semantics.
+
 Check whether `userID` can currently control `/buddy`:
 
 ```bash
@@ -63,6 +75,26 @@ Apply only after confirming the diagnosis:
 node dist/bin.js find --species dragon --shiny true --min-total 400 --apply --json
 ```
 
+If the target Claude Code uses Bun semantics, apply with Bun instead:
+
+```bash
+bun dist/bin.js find --runtime bun --species dragon --shiny true --min-total 400 --apply --json
+```
+
+List built-in presets:
+
+```bash
+node dist/bin.js presets --json
+```
+
+Resolve a preset directly:
+
+```bash
+node dist/bin.js find --preset dragon-shiny-halo-debug-54-chaos-100 --runtime node --json
+bun dist/bin.js find --preset capybara-shiny-min-wisdom-51 --runtime bun --json
+bun dist/bin.js materialize --seed 130412512 --runtime bun --state-file /tmp/buddy-materialize.json --max-steps 10 --json
+```
+
 ## Use With Claude Code
 
 The intended human workflow is not to memorize commands. Instead, send one of this repository's documentation links to Claude Code and ask the agent to follow it while operating the CLI.
@@ -71,6 +103,7 @@ Recommended prompt:
 
 ```text
 Please read this repository guide and use claude-buddy-cli accordingly.
+First determine whether my Claude Code installation uses Node or Bun semantics, and use the matching runtime for apply.
 Run doctor first to verify whether userID controls /buddy, then search for a Buddy that matches my constraints.
 Do not mutate config unless I explicitly confirm apply.
 ```
@@ -99,13 +132,29 @@ UID reconstruction is the runtime-dependent part.
 Current behavior:
 
 - `find` works under both Node and Bun
+- under Bun, general `find` returns directly usable `userID` witnesses for the requested filters
+- Bun general search no longer stops at a fixed first-10-million witness window; it continues until it finds enough results or exhausts the 32-bit suffix space
+- Bun general search uses internally randomized prefix lanes, so separate runs may return different but still valid `userID` values
+- built-in presets are also runtime-aware
+- Node presets are backed by stored seeds
+- Bun general searches already return directly usable `userID` witnesses
+- exact Bun seeds and exact Bun presets should use `materialize --seed ... --state-file ...` so progress can resume instead of restarting
 - `find --apply --runtime node` works from either a Node or Bun process
 - `find --apply --runtime bun` requires the CLI itself to run under Bun
 - requesting `--runtime bun` from a Node process during apply returns an explicit error
+- the "correct" `userID` is the one that matches the runtime of the target Claude Code installation
 
 ## OAuth and Config Writes
 
 `--apply` selects the top-ranked candidate, reconstructs a `64`-hex `userID`, and writes it into Claude Code config.
+
+For Bun general search, `find` already returns directly usable `userID` values in each result, and `--apply` writes the first result's `userID` instead of doing a second slow reconstruction step.
+
+For exact Bun seeds, use `materialize` instead of repeatedly rerunning `find`:
+
+```bash
+bun dist/bin.js materialize --seed 130412512 --runtime bun --state-file /tmp/buddy-materialize.json --max-steps 10 --json
+```
 
 If config still contains `oauthAccount.accountUuid`, Claude Code may continue ignoring `userID`. Therefore:
 
