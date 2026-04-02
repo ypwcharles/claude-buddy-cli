@@ -4,11 +4,11 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-blue.svg)](https://nodejs.org/)
 [![Bun](https://img.shields.io/badge/bun-%3E%3D1.1-blue.svg)](https://bun.sh/)
 
-[中文](./README.zh-CN.md) | [English](./README.en.md)
+[中文](./README.md) | [English](./README.en.md)
 
 **Claude Code Buddy 搜索工具** — 帮你在 Claude Code 中找到你想要的宠物伙伴，并一键换上它。
 
-[安装](#安装) · [命令](#命令) · [人类用户快速开始](#人类用户快速开始) · [AI Agent 快速开始](#ai-agent-快速开始) · [安全规则](#安全规则) · [文档](./README.zh-CN.md)
+[安装](#安装) · [命令](#命令) · [人类用户快速开始](#人类用户快速开始) · [AI Agent 快速开始](#ai-agent-快速开始) · [安全规则](#安全规则) · [文档](#文档)
 
 ## 为什么选 claude-buddy-cli？
 
@@ -31,12 +31,20 @@
 
 | 属性    | 值示例                                              |
 | ------- | --------------------------------------------------- |
-| `species` | `dragon`, `cat`, `duck`, `axolotl`, `ghost` 等 18 种 |
+| `species` | `duck`, `goose`, `blob`, `cat`, `dragon`, `octopus`, `owl`, `penguin`, `turtle`, `snail`, `ghost`, `axolotl`, `capybara`, `cactus`, `robot`, `rabbit`, `mushroom`, `chonk` |
 | `rarity` | `common`, `uncommon`, `rare`, `epic`, `legendary` |
 | `eye`    | `·`, `✦`, `×`, `◉`, `@`, `°`                       |
 | `hat`    | `none`, `crown`, `tophat`, `propeller`, `halo`, `wizard`, `beanie`, `tinyduck` |
 | `shiny`  | `true` / `false`                                   |
-| `stats`  | `DEBUGGING`, `PATIENCE`, `CHAOS`, `WISDOM`, `SNARK`（各 1-100）|
+| `stats`  | `DEBUGGING`, `PATIENCE`, `CHAOS`, `WISDOM`, `SNARK`（单项各 `1-100`，当前生成器总属性上限 `421`）|
+
+## 生成硬限制与可达性
+
+- Buddy 的生成空间由 `32` 位 seed 决定：`2^32 = 4,294,967,296`
+- 因此“可达宠物”总数上限是 `4,294,967,296`（实际唯一组合数可能更低，但不会更高）
+- 单项属性硬限制是 `1-100`，当前生成器下总属性上限是 `421`
+- 结构硬限制：`rarity=common` 时 `hat` 必定为 `none`
+- 并非所有筛选组合都可达；如果在完整 seed 空间扫描后仍然 `0` 命中，表示该组合在当前生成机制下不存在
 
 ## 安装
 
@@ -53,8 +61,8 @@
 > - 目标 Claude Code 是 **Bun 安装**：就用 **Bun 语义**生成和写入 `userID`
 > - 搜索候选只依赖 seed，本身与运行时无关
 > - 真正依赖运行时的是 UID 反推和 `--apply`
-> - 其中 Bun 的一般搜索场景会直接返回可用 `userID`，不要求和 Node 的 seed-first 行为完全一致
-> - Bun 的一般搜索不再固定卡在前 `1000万` 个候选，而是会持续搜索，直到找到足够结果或扫完整个 `32` 位 suffix 空间
+> - Bun 与 Node 一样采用 seed-first：`find` dry-run 返回 seed 候选
+> - 在 Bun 下，`find --apply` 会对选中的 seed 进行 materialize，再写入 `userID`
 
 ### 安装 CLI
 
@@ -78,23 +86,32 @@ bun install && bun run build
 
 ### 搜索过滤器
 
-| 参数          | 示例                            | 说明                      |
-| ------------- | ------------------------------- | ------------------------- |
-| `--preset`    | `--preset capybara-shiny-min-wisdom-51` | 使用内置 preset |
-| `--species`   | `--species dragon`              | 物种名称                  |
-| `--rarity`    | `--rarity legendary`           | 稀有度等级                |
-| `--eye`       | `--eye ✦`                      | 眼睛类型                  |
-| `--hat`       | `--hat crown`                  | 帽子类型                  |
-| `--shiny`     | `--shiny true`                 | 是否闪光                  |
-| `--min-total` | `--min-total 400`              | 最低总属性值              |
-| `--max-total` | `--max-total 450`              | 最高总属性值              |
-| `--debugging` | `--debugging 90`               | DEBUGGING 属性值          |
-| `--min-debugging` | `--min-debugging 80`       | DEBUGGING 最低值          |
-| `--max-chaos` | `--max-chaos 30`              | CHAOS 最高值             |
-| `--start-seed` | `--start-seed 1000`          | 搜索起始种子（范围限制）  |
-| `--end-seed`  | `--end-seed 1000000`          | 搜索结束种子              |
-| `--limit`     | `--limit 10`                  | 最大返回数量（默认 20）   |
-| `--json`      | `--json`                      | 输出 JSON 格式（推荐）    |
+| 参数 | 示例 | 可选值 / 说明 |
+| --- | --- | --- |
+| `--preset` | `--preset capybara-shiny-min-wisdom-51` | 使用内置 preset（可先 `presets --json` 查看） |
+| `--species` | `--species dragon` | `duck \| goose \| blob \| cat \| dragon \| octopus \| owl \| penguin \| turtle \| snail \| ghost \| axolotl \| capybara \| cactus \| robot \| rabbit \| mushroom \| chonk` |
+| `--rarity` | `--rarity legendary` | `common \| uncommon \| rare \| epic \| legendary` |
+| `--eye` | `--eye ✦` | `· \| ✦ \| × \| ◉ \| @ \| °` |
+| `--hat` | `--hat crown` | `none \| crown \| tophat \| propeller \| halo \| wizard \| beanie \| tinyduck` |
+| `--shiny` | `--shiny true` | `true \| false` |
+| `--min-total` / `--max-total` | `--min-total 400 --max-total 421` | 总属性过滤（当前生成器上限 `421`） |
+| `--debugging` / `--min-debugging` / `--max-debugging` | `--min-debugging 80` | `DEBUGGING` 精确值或范围，`1-100` |
+| `--patience` / `--min-patience` / `--max-patience` | `--patience 89` | `PATIENCE` 精确值或范围，`1-100` |
+| `--chaos` / `--min-chaos` / `--max-chaos` | `--max-chaos 30` | `CHAOS` 精确值或范围，`1-100` |
+| `--wisdom` / `--min-wisdom` / `--max-wisdom` | `--min-wisdom 51` | `WISDOM` 精确值或范围，`1-100` |
+| `--snark` / `--min-snark` / `--max-snark` | `--snark 88` | `SNARK` 精确值或范围，`1-100` |
+| `--start-seed` / `--end-seed` | `--start-seed 0 --end-seed 1000000` | 指定 seed 扫描范围，`start` 含、`end` 不含 |
+| `--limit` | `--limit 10` | 最大返回数量（默认 `20`） |
+| `--runtime` | `--runtime bun` | `auto \| node \| bun` |
+| `--state-file` | `--state-file /tmp/buddy-state.json` | Bun materialize 进度文件（可恢复） |
+| `--chunk-size` | `--chunk-size 1000000` | Bun materialize 每步每 lane 扫描量 |
+| `--lane-count` | `--lane-count 1` | Bun materialize lane 数 |
+| `--max-steps` | `--max-steps 10` | Bun materialize 本次最多执行步数 |
+| `--search-seed` | `--search-seed preset:shiny-max-dragon-3716311402` | 固定 Bun materialize campaign |
+| `--bun-workers` | `--bun-workers 8` | Bun materialize 并行 worker 数 |
+| `--json` | `--json` | 输出机器可读 JSON（推荐） |
+| `--apply` | `--apply` | 在用户确认后写入配置 |
+| `--force-apply` | `--force-apply` | 即使 `userID` 当前不生效也强制写入（谨慎） |
 
 运行 `node dist/bin.js --help` 查看完整参数列表。
 
@@ -112,13 +129,18 @@ bun dist/bin.js find --preset capybara-shiny-min-wisdom-51 --runtime bun --json
 
 # 对 Bun 的精确 seed，使用可恢复的 materialize
 bun dist/bin.js materialize --seed 130412512 --runtime bun --state-file /tmp/buddy-materialize.json --max-steps 10 --json
+
+# Bun preset dry-run 返回 seed 候选；确认后用 --apply 进行 materialize + 写入
+bun dist/bin.js find --preset full421-rabbit-130412512 --runtime bun --json
+bun dist/bin.js find --preset full421-rabbit-130412512 --runtime bun --apply --state-file /tmp/buddy-materialize.json --max-steps 10 --json
 ```
 
 > **实现说明：**
 >
 > - Node preset 依赖内置 `seed`
-> - Bun 的一般搜索会直接返回可写入的 witness `userID`
-> - 对 Bun 的精确 seed / 精确 preset，工具支持 `materialize` 长任务与断点续跑
+> - Bun 与 Node 一样先返回 seed 候选，语义统一
+> - Bun 在 `--apply` 或 `materialize` 阶段生成可写入 `userID`
+> - 对 Bun 的长任务可使用 `--state-file` 断点续跑
 > - 因此同一个 preset 在 Node 和 Bun 下可以有不同的 seed / `userID` 获取路径
 
 ## 人类用户快速开始
@@ -240,8 +262,8 @@ node dist/bin.js find --species dragon --shiny true --min-total 400 --apply
 - **Dry Run 优先** — 测试时设置 `CLAUDE_BUDDY_CONFIG_PATH` 指向临时文件，避免污染真实配置
 - **`oauthAccount.accountUuid` 时阻断** — `doctor` 返回该值时，`--apply` 会被工具阻断
 - **`--force-apply` 需明确授权** — 仅当用户明确要求写入 `userID` 时使用，即使该值当前无法控制 `/buddy`
-- **Bun 结果可直接写入** — 对 Bun 的一般搜索场景，`find --json` 返回的结果已经包含可用 `userID`，`--apply` 会直接写第一条结果
-- **Bun 精确 seed 用 `materialize`** — 对精确 seed 或精确 preset，使用 `materialize --seed ... --state-file ...` 做可恢复的 Bun 反推
+- **Bun 与 Node 统一 seed-first** — `find --json` 返回 seed 候选；`--apply` 时才 materialize 并写入 `userID`
+- **Bun 可恢复 materialize** — 对精确 seed 或长任务，可用 `materialize --seed ... --state-file ...` 断点续跑
 - **Bun 一般搜索的 `userID` 不是固定的** — 工具会在内部使用随机 prefix 轨道寻找 witness，因此不同运行、不同用户可能拿到不同但同样可用的 `userID`
 
 ## 环境变量
@@ -253,7 +275,7 @@ node dist/bin.js find --species dragon --shiny true --min-total 400 --apply
 
 ## 文档
 
-- **中文指南**: [README.zh-CN.md](./README.zh-CN.md)
+- **中文指南**: [README.md](./README.md)
 - **English guide**: [README.en.md](./README.en.md)
 - **Agent 完整指南（必读）**: [AGENTS.md](./AGENTS.md)
 
