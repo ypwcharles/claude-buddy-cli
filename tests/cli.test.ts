@@ -146,6 +146,7 @@ describe("runCli", () => {
       const parsed = JSON.parse(output.join(""));
       expect(parsed.applied).toBe(true);
       expect(parsed.appliedUserID).toMatch(/^[0-9a-f]{64}$/);
+      expect(parsed.backupPath).toMatch(/^.+\.claude\.json\.bak\./);
       expect(parsed.results).toHaveLength(1);
 
       const saved = JSON.parse(await readFile(configPath, "utf8")) as {
@@ -155,6 +156,13 @@ describe("runCli", () => {
 
       expect(saved.theme).toBe("dark");
       expect(saved.userID).toBe(parsed.appliedUserID);
+
+      const backup = JSON.parse(await readFile(parsed.backupPath, "utf8")) as {
+        theme: string;
+        userID?: string;
+      };
+      expect(backup.theme).toBe("dark");
+      expect(backup.userID).toBeUndefined();
     } finally {
       delete process.env.CLAUDE_BUDDY_CONFIG_PATH;
       await rm(directory, { recursive: true, force: true });
@@ -284,6 +292,74 @@ describe("runCli", () => {
       expect(saved.userID).toBe("custom-id");
     } finally {
       delete process.env.CLAUDE_BUDDY_CONFIG_PATH;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks --apply when env account metadata blocks userID control", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "claude-buddy-cli-block-env-"));
+    const configPath = path.join(directory, ".claude.json");
+    await writeFile(
+      configPath,
+      `${JSON.stringify({
+        userID: "custom-id",
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    process.env.CLAUDE_BUDDY_CONFIG_PATH = configPath;
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "test-token";
+    process.env.CLAUDE_CODE_ACCOUNT_UUID = "account-uuid-1";
+    process.env.CLAUDE_CODE_USER_EMAIL = "user@example.com";
+    process.env.CLAUDE_CODE_ORGANIZATION_UUID = "org-uuid-1";
+
+    try {
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const exitCode = await runCli(
+        [
+          "find",
+          "--species",
+          "dragon",
+          "--shiny",
+          "true",
+          "--chaos",
+          "100",
+          "--debugging",
+          "54",
+          "--hat",
+          "halo",
+          "--start-seed",
+          "3716311402",
+          "--end-seed",
+          "3716311403",
+          "--limit",
+          "1",
+          "--runtime",
+          "node",
+          "--apply",
+          "--json",
+        ],
+        {
+          writeStdout: (chunk) => stdout.push(chunk),
+          writeStderr: (chunk) => stderr.push(chunk),
+          stderrIsTTY: false,
+        },
+      );
+
+      expect(exitCode).toBe(1);
+      expect(stdout.join("")).toBe("");
+      expect(stderr.join("")).toContain("userID would not control /buddy");
+
+      const saved = JSON.parse(await readFile(configPath, "utf8")) as {
+        userID: string;
+      };
+      expect(saved.userID).toBe("custom-id");
+    } finally {
+      delete process.env.CLAUDE_BUDDY_CONFIG_PATH;
+      delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      delete process.env.CLAUDE_CODE_ACCOUNT_UUID;
+      delete process.env.CLAUDE_CODE_USER_EMAIL;
+      delete process.env.CLAUDE_CODE_ORGANIZATION_UUID;
       await rm(directory, { recursive: true, force: true });
     }
   });

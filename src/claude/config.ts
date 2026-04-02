@@ -46,8 +46,10 @@ export async function applyUserIdToConfig(userID: string): Promise<{
   path: string;
   data: ClaudeConfig;
   warning?: string;
+  backupPath?: string;
 }> {
   const loaded = await loadClaudeConfig();
+  const backupPath = await backupClaudeConfig(loaded.path);
   const nextData: ClaudeConfig = {
     ...loaded.data,
     userID,
@@ -67,7 +69,25 @@ export async function applyUserIdToConfig(userID: string): Promise<{
     path: loaded.path,
     data: nextData,
     warning,
+    backupPath,
   };
+}
+
+async function backupClaudeConfig(filePath: string): Promise<string | undefined> {
+  let original: string;
+  try {
+    original = await readFile(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupPath = `${filePath}.bak.${timestamp}-${process.pid}`;
+  await writeFile(backupPath, original, "utf8");
+  return backupPath;
 }
 
 export async function inspectBuddyIdentityControl(): Promise<{

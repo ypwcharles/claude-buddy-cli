@@ -806,6 +806,16 @@ function ioWrite(io: CliIo, stream: "stdout" | "stderr", chunk: string): void {
   }
 }
 
+function isUserIdApplyBlocked(
+  diagnosis: Awaited<ReturnType<typeof inspectBuddyIdentityControl>>,
+): boolean {
+  return (
+    diagnosis.compatibilityMode === "env-token-blocked-by-config-oauthAccount" ||
+    diagnosis.compatibilityMode === "env-token-blocked-by-env-account-metadata" ||
+    diagnosis.compatibilityMode === "standard-login-oauthAccount-active"
+  );
+}
+
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
@@ -1096,7 +1106,7 @@ export async function runCli(
 
       if (options.apply) {
         const diagnosis = await inspectBuddyIdentityControl();
-        if (!diagnosis.userIDControlsBuddy && !options.forceApply) {
+        if (isUserIdApplyBlocked(diagnosis) && !options.forceApply) {
           ioWrite(
             io,
             "stderr",
@@ -1120,6 +1130,7 @@ export async function runCli(
           appliedStrategy: payload.searchStrategy,
           configPath: appliedConfig.path,
           warning: appliedConfig.warning,
+          backupPath: appliedConfig.backupPath,
           forceApplied: options.forceApply,
         });
       }
@@ -1168,7 +1179,7 @@ export async function runCli(
 
     if (options.apply) {
       const diagnosis = await inspectBuddyIdentityControl();
-      if (!diagnosis.userIDControlsBuddy && !options.forceApply) {
+      if (isUserIdApplyBlocked(diagnosis) && !options.forceApply) {
         ioWrite(
           io,
           "stderr",
@@ -1263,6 +1274,7 @@ export async function runCli(
         appliedStrategy,
         configPath: appliedConfig.path,
         warning: appliedConfig.warning,
+        backupPath: appliedConfig.backupPath,
         forceApplied: options.forceApply,
       });
     }

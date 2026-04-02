@@ -31,8 +31,9 @@ export function searchSeeds(
 ): SearchCandidate[] {
   const startSeed = options.startSeed ?? 0;
   const endSeed = options.endSeed ?? UINT32_LIMIT;
-  const limit = options.limit ?? DEFAULT_LIMIT;
+  const limit = Math.max(0, options.limit ?? DEFAULT_LIMIT);
   const matches: SearchCandidate[] = [];
+  let totalMatches = 0;
   const total = Math.max(0, endSeed - startSeed);
   const progressIntervalSeeds =
     options.progressIntervalSeeds ?? DEFAULT_PROGRESS_INTERVAL_SEEDS;
@@ -60,7 +61,7 @@ export function searchSeeds(
         options.onProgress({
           scanned,
           total,
-          matches: matches.length,
+          matches: totalMatches,
           elapsedMs: now - startedAt,
           currentSeedExclusive: seed + 1,
           done: false,
@@ -69,7 +70,27 @@ export function searchSeeds(
       continue;
     }
 
-    matches.push(candidate);
+    totalMatches++;
+    if (limit > 0) {
+      if (matches.length === 0) {
+        matches.push(candidate);
+      } else {
+        let inserted = false;
+        for (let index = 0; index < matches.length; index++) {
+          if (rankCandidates(candidate, matches[index]!) < 0) {
+            matches.splice(index, 0, candidate);
+            inserted = true;
+            if (matches.length > limit) {
+              matches.pop();
+            }
+            break;
+          }
+        }
+        if (!inserted && matches.length < limit) {
+          matches.push(candidate);
+        }
+      }
+    }
 
     const scanned = seed - startSeed + 1;
     if (
@@ -82,7 +103,7 @@ export function searchSeeds(
       options.onProgress({
         scanned,
         total,
-        matches: matches.length,
+        matches: totalMatches,
         elapsedMs: now - startedAt,
         currentSeedExclusive: seed + 1,
         done: false,
@@ -95,11 +116,11 @@ export function searchSeeds(
     options.onProgress({
       scanned: total,
       total,
-      matches: matches.length,
+      matches: totalMatches,
       elapsedMs: Date.now() - startedAt,
       currentSeedExclusive: endSeed,
       done: true,
     });
   }
-  return matches.slice(0, limit);
+  return matches;
 }
