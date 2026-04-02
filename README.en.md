@@ -294,7 +294,7 @@ node dist/bin.js find --species dragon --shiny true --min-total 400 --apply
 | Variable | Description |
 | --- | --- |
 | `CLAUDE_BUDDY_CONFIG_PATH` | Config file path (default: `~/.claude.json`). Set to temp path in tests for dry run. |
-| `CLAUDE_BUDDY_RUNTIME` | Force runtime: `node` or `bun` (default: `auto`) |
+| `CLAUDE_BUDDY_RUNTIME` | Force runtime to `node` or `bun` when `--runtime` is not passed. Precedence: `--runtime` > `CLAUDE_BUDDY_RUNTIME` > current process runtime. |
 
 ## Docs
 

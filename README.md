@@ -294,7 +294,7 @@ node dist/bin.js find --species dragon --shiny true --min-total 400 --apply
 | 变量                      | 说明                                       |
 | ------------------------- | ------------------------------------------ |
 | `CLAUDE_BUDDY_CONFIG_PATH` | 配置文件路径（默认：`~/.claude.json`）。测试时设为临时文件路径以实现 Dry Run。 |
-| `CLAUDE_BUDDY_RUNTIME`    | 强制运行时：`node` 或 `bun`（默认：`auto`） |
+| `CLAUDE_BUDDY_RUNTIME`    | 当未传 `--runtime` 时强制运行时：`node` 或 `bun`。优先级：`--runtime` > `CLAUDE_BUDDY_RUNTIME` > 当前进程运行时。 |
 
 ## 文档
 

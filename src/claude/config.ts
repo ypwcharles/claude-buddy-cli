@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import crypto from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -10,6 +11,13 @@ type ClaudeConfig = Record<string, unknown> & {
 };
 
 export type { ClaudeConfig };
+
+type AtomicWriteOps = {
+  mkdir: typeof mkdir;
+  writeFile: typeof writeFile;
+  rename: typeof rename;
+  randomUUID: () => string;
+};
 
 export function getClaudeConfigPath(): string {
   const override = process.env.CLAUDE_BUDDY_CONFIG_PATH;
@@ -56,8 +64,10 @@ export async function applyUserIdToConfig(userID: string): Promise<{
   };
 
   const parent = path.dirname(loaded.path);
-  await mkdir(parent, { recursive: true });
-  await writeFile(loaded.path, `${JSON.stringify(nextData, null, 2)}\n`, "utf8");
+  await writeFileAtomically(
+    loaded.path,
+    `${JSON.stringify(nextData, null, 2)}\n`,
+  );
 
   const accountUuid = nextData.oauthAccount?.accountUuid;
   const warning =
@@ -71,6 +81,29 @@ export async function applyUserIdToConfig(userID: string): Promise<{
     warning,
     backupPath,
   };
+}
+
+export async function writeFileAtomically(
+  filePath: string,
+  contents: string,
+  ops: Partial<AtomicWriteOps> = {},
+): Promise<void> {
+  const writeOps: AtomicWriteOps = {
+    mkdir,
+    writeFile,
+    rename,
+    randomUUID: () => crypto.randomUUID(),
+    ...ops,
+  };
+  const parent = path.dirname(filePath);
+  const tempPath = path.join(
+    parent,
+    `.${path.basename(filePath)}.tmp-${process.pid}-${writeOps.randomUUID()}`,
+  );
+
+  await writeOps.mkdir(parent, { recursive: true });
+  await writeOps.writeFile(tempPath, contents, "utf8");
+  await writeOps.rename(tempPath, filePath);
 }
 
 async function backupClaudeConfig(filePath: string): Promise<string | undefined> {

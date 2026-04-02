@@ -88,6 +88,8 @@ const RARITY_VALUES = RARITIES.join(", ");
 const EYE_VALUES = EYES.join(", ");
 const HAT_VALUES = HATS.join(", ");
 const STAT_VALUES = STAT_NAMES.join(", ");
+const UINT32_MAX = 0xffff_ffff;
+const UINT32_LIMIT = 0x1_0000_0000;
 const FULL421_PRESET_COUNT = listBuddyPresets().filter(
   (preset) => preset.category === "full421",
 ).length;
@@ -248,6 +250,20 @@ function parseNumberFlag(flag: string, value: string | undefined): number {
     throw new Error(`Invalid number for ${flag}: ${value}`);
   }
   return parsed;
+}
+
+function assertIntegerInRange(
+  flag: string,
+  value: number | undefined,
+  minimum: number,
+  maximum: number,
+): void {
+  if (value === undefined) {
+    return;
+  }
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`Invalid value for ${flag}: ${value}. Expected integer in [${minimum}, ${maximum}].`);
+  }
 }
 
 function parseRuntime(value: string | undefined): RuntimeMode {
@@ -430,6 +446,16 @@ function parseFindArgs(argv: string[]): FindCommandOptions {
     }
   }
 
+  assertIntegerInRange("--start-seed", startSeed, 0, UINT32_LIMIT);
+  assertIntegerInRange("--end-seed", endSeed, 0, UINT32_LIMIT);
+  if (
+    startSeed !== undefined &&
+    endSeed !== undefined &&
+    endSeed < startSeed
+  ) {
+    throw new Error(`Invalid seed range: --end-seed (${endSeed}) must be >= --start-seed (${startSeed}).`);
+  }
+
   return {
     runtime,
     json,
@@ -559,6 +585,7 @@ function parseMaterializeArgs(argv: string[]): MaterializeCommandOptions {
   if (seed === undefined) {
     throw new Error("Missing required flag: --seed");
   }
+  assertIntegerInRange("--seed", seed, 0, UINT32_MAX);
 
   return {
     seed,

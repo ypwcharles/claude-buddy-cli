@@ -63,6 +63,58 @@ describe("runCli", () => {
     expect(hashUserIdToSeed(parsed.result.userID, "node")).toBe(3716311402);
   });
 
+  it("rejects invalid exact seeds instead of coercing them", async () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+
+    const exitCode = await runCli(
+      [
+        "materialize",
+        "--seed",
+        "4294967296",
+        "--runtime",
+        "node",
+        "--json",
+      ],
+      {
+        writeStdout: (chunk) => stdout.push(chunk),
+        writeStderr: (chunk) => stderr.push(chunk),
+        stderrIsTTY: false,
+      },
+    );
+
+    expect(exitCode).toBe(1);
+    expect(stdout.join("")).toBe("");
+    expect(stderr.join("")).toContain("Invalid value for --seed");
+  });
+
+  it("rejects invalid seed scan ranges instead of wrapping them", async () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+
+    const exitCode = await runCli(
+      [
+        "find",
+        "--start-seed",
+        "-1",
+        "--end-seed",
+        "1",
+        "--limit",
+        "1",
+        "--json",
+      ],
+      {
+        writeStdout: (chunk) => stdout.push(chunk),
+        writeStderr: (chunk) => stderr.push(chunk),
+        stderrIsTTY: false,
+      },
+    );
+
+    expect(exitCode).toBe(1);
+    expect(stdout.join("")).toBe("");
+    expect(stderr.join("")).toContain("Invalid value for --start-seed");
+  });
+
   it("supports structured find filters and json output", async () => {
     const output: string[] = [];
 
@@ -102,6 +154,37 @@ describe("runCli", () => {
     expect(parsed.results).toHaveLength(2);
     expect(parsed.results[0].seed).toBe(1497);
     expect(parsed.results[1].seed).toBe(849);
+  });
+
+  it("uses CLAUDE_BUDDY_RUNTIME when --runtime is left at auto", async () => {
+    process.env.CLAUDE_BUDDY_RUNTIME = "bun";
+
+    try {
+      const output: string[] = [];
+      const exitCode = await runCli(
+        [
+          "find",
+          "--start-seed",
+          "0",
+          "--end-seed",
+          "1",
+          "--limit",
+          "1",
+          "--json",
+        ],
+        {
+          write: (chunk) => output.push(chunk),
+        },
+      );
+
+      expect(exitCode).toBe(0);
+
+      const parsed = JSON.parse(output.join(""));
+      expect(parsed.runtime).toBe("auto");
+      expect(parsed.resolvedRuntime).toBe("bun");
+    } finally {
+      delete process.env.CLAUDE_BUDDY_RUNTIME;
+    }
   });
 
   it("applies the first Node candidate to Claude config when --apply is used", async () => {
